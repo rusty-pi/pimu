@@ -48,12 +48,20 @@ pub(super) enum Kind {
     StoreUimm,
     LdStRegOff,
     LdStImm,
+    /// `LDP`/`STP` (and the non-temporal forms) of S, D or Q registers.
+    PairV,
     Pair,
     // The PC, or an exception at it.
     DpImm,
     DpReg,
     Adr,
     Adrp,
+    /// SIMD and floating point data processing: the vector and FP registers,
+    /// `FPSR` and `NZCV` only, through `exec::execute`. A run goes on
+    /// through it, where `Execute` would end there.
+    SimdDp,
+    /// `MRS` of a register the core holds itself (`sysreg::core_only`).
+    Mrs,
     // Registers and flags only (`Op::pure`).
     Nop,
     CmpImm,
@@ -219,6 +227,7 @@ pub(super) fn decode(insn: u32) -> Op {
         0b1010 | 0b1011 => branch(insn).unwrap_or_else(|| generic(Kind::Execute)),
         0b0100 | 0b0110 | 0b1100 | 0b1110 => ldst(insn).unwrap_or_else(|| generic(Kind::Execute)),
         0b0101 | 0b1101 => dp_reg(insn).unwrap_or_else(|| generic(Kind::DpReg)),
+        0b0111 | 0b1111 => generic(Kind::SimdDp),
         _ => generic(Kind::Execute),
     }
 }
@@ -333,6 +342,15 @@ fn branch(insn: u32) -> Option<Op> {
     } else if insn & 0xFFFF_F0DF == 0xD503_309F {
         // DSB, DMB.
         Some(op(insn, Kind::Barrier, 0, 0, 0, 0))
+    } else if insn & 0xFFF0_0000 == 0xD530_0000 && super::sysreg::core_only(field(insn, 5, 16)) {
+        Some(op(
+            insn,
+            Kind::Mrs,
+            field(insn, 0, 5),
+            0,
+            0,
+            field(insn, 5, 16) as u64,
+        ))
     } else if insn & 0xFE00_0000 == 0xD600_0000 {
         Some(op(insn, Kind::BranchReg, 0, 0, 0, 0))
     } else {
@@ -351,8 +369,12 @@ fn ldst(insn: u32) -> Option<Op> {
         if bit(insn, 26) {
             return None;
         }
-        let (scale, access) =
-            single_access(field(insn, 30, 2), false, field(insn, 22, 2)).ok()??;
+        let Some((scale, access)) =
+            single_access(field(insn, 30, 2), false, field(insn, 22, 2)).ok()?
+        else {
+            // PRFM: the model has no caches to fill.
+            return Some(op(insn, Kind::Nop, 0, 0, 0, 0));
+        };
         let rt = field(insn, 0, 5);
         let rn = field(insn, 5, 5);
         let imm = (field(insn, 10, 12) as u64) << scale;
@@ -388,9 +410,30 @@ fn ldst(insn: u32) -> Option<Op> {
     }
 }
 
+fn pair_v(insn: u32) -> Option<Op> {
+    let opc = field(insn, 30, 2);
+    if opc == 3 {
+        return None;
+    }
+    let scale = 2 + opc;
+    let mode = field(insn, 23, 2);
+    let store = !bit(insn, 22);
+    let off = sext(field(insn, 15, 7) as u64, 7) << scale;
+    let flags = scale | (store as u32) << 3 | mode << 4;
+    Some(op2(
+        insn,
+        Kind::PairV,
+        field(insn, 0, 5),
+        field(insn, 5, 5),
+        field(insn, 10, 5),
+        off,
+        flags as u64,
+    ))
+}
+
 fn pair(insn: u32) -> Option<Op> {
     if bit(insn, 26) {
-        return None;
+        return pair_v(insn);
     }
     let opc = field(insn, 30, 2);
     let mode = field(insn, 23, 2);
@@ -638,10 +681,10 @@ impl Op {
         }
         go!(
             Execute, BranchReg, B, Bl, BCond, Cbz, Tbz, LdrX, LdrW, LdrH, LdrB, StrX, StrW, StrH,
-            StrB, Barrier, LdStReg, LdStPair, LoadUimm, StoreUimm, LdStRegOff, LdStImm, Pair,
-            DpImm, DpReg, Adr, Adrp, Nop, CmpImm, CmpImmW, CmpReg, CmpRegW, AddImmR, SubImmR,
-            MovReg, AddImm, SubImm, AddsImm, SubsImm, MovConst, MovK, LogicImm, LogicReg,
-            AddSubReg, Bitfield, Ccmp, Csel, Madd
+            StrB, Barrier, LdStReg, LdStPair, LoadUimm, StoreUimm, LdStRegOff, LdStImm, PairV,
+            Pair, DpImm, DpReg, Adr, Adrp, SimdDp, Mrs, Nop, CmpImm, CmpImmW, CmpReg, CmpRegW,
+            AddImmR, SubImmR, MovReg, AddImm, SubImm, AddsImm, SubsImm, MovConst, MovK, LogicImm,
+            LogicReg, AddSubReg, Bitfield, Ccmp, Csel, Madd
         )
     }
 }
@@ -680,11 +723,14 @@ pub(super) fn handler_of<M: Memory + ?Sized>(kind: Kind) -> Handler<M> {
         Kind::StoreUimm => h_store_uimm::<M>,
         Kind::LdStRegOff => h_ld_st_reg_off::<M>,
         Kind::LdStImm => h_ld_st_imm::<M>,
+        Kind::PairV => h_pair_v::<M>,
         Kind::Pair => h_pair::<M>,
         Kind::DpImm => h_dp_imm::<M>,
         Kind::DpReg => h_dp_reg::<M>,
         Kind::Adr => h_adr::<M>,
         Kind::Adrp => h_adrp::<M>,
+        Kind::SimdDp => h_simd::<M>,
+        Kind::Mrs => h_mrs::<M>,
         Kind::AddImm => h_add_imm::<M>,
         Kind::SubImm => h_sub_imm::<M>,
         Kind::AddsImm => h_adds_imm::<M>,
@@ -908,6 +954,23 @@ fn h_execute<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) ->
     cpu.next_pc = pc.wrapping_add(4);
     let r = exec::execute(cpu, o.insn, mem);
     settled(cpu, r)
+}
+
+fn h_simd<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.pc = pc;
+    cpu.next_pc = pc.wrapping_add(4);
+    let r = super::simd::execute(cpu, o.insn);
+    settled(cpu, r)
+}
+
+fn h_mrs<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    match super::sysreg::read(cpu, o.imm as u32, mem) {
+        Ok(v) => {
+            cpu.set_xr(o.a as u32, true, v);
+            pc.wrapping_add(4)
+        }
+        Err(s) => faulted(cpu, s, pc),
+    }
 }
 
 fn h_branch_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
@@ -1174,6 +1237,37 @@ fn h_pair<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u6
     }
     cpu.set_xr(a, sf, first);
     cpu.set_xr(c, sf, second);
+    pc.wrapping_add(4)
+}
+
+/// `LDP`/`STP` of SIMD and FP registers: both halves straight through the
+/// data TLB, or the whole instruction through `exec`.
+fn h_pair_v<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b, c) = (o.a as usize, o.b as u32, o.c as usize);
+    let f = o.imm2 as u32;
+    let bytes = 1usize << (f & 7);
+    let store = f & 8 != 0;
+    let (addr, wb) = indexed(cpu.xsp(b), o.imm, (f >> 4) & 3);
+    let Some(p) = cpu.host_span(mem, addr, 2 * bytes as u32, store) else {
+        return h_execute(cpu, o, mem, pc);
+    };
+    // Inside the page, which `host_span` vouched for; the vector registers
+    // are little-endian as the guest's memory is.
+    unsafe {
+        if store {
+            std::ptr::copy_nonoverlapping(cpu.v[a].to_le_bytes().as_ptr(), p, bytes);
+            std::ptr::copy_nonoverlapping(cpu.v[c].to_le_bytes().as_ptr(), p.add(bytes), bytes);
+        } else {
+            let (mut x, mut y) = ([0u8; 16], [0u8; 16]);
+            std::ptr::copy_nonoverlapping(p, x.as_mut_ptr(), bytes);
+            std::ptr::copy_nonoverlapping(p.add(bytes), y.as_mut_ptr(), bytes);
+            cpu.v[a] = u128::from_le_bytes(x);
+            cpu.v[c] = u128::from_le_bytes(y);
+        }
+    }
+    if let Some(wb) = wb {
+        cpu.set_xsp(b, true, wb);
+    }
     pc.wrapping_add(4)
 }
 

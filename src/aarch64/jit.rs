@@ -857,10 +857,10 @@ fn step_of<M: RunBus>(kind: Kind) -> Step {
     }
     steps!(
         Execute, BranchReg, B, Bl, BCond, Cbz, Tbz, LdrX, LdrW, LdrH, LdrB, StrX, StrW, StrH, StrB,
-        Barrier, LdStReg, LdStPair, LoadUimm, StoreUimm, LdStRegOff, LdStImm, Pair, DpImm, DpReg,
-        Adr, Adrp, Nop, CmpImm, CmpImmW, CmpReg, CmpRegW, AddImmR, SubImmR, MovReg, AddImm, SubImm,
-        AddsImm, SubsImm, MovConst, MovK, LogicImm, LogicReg, AddSubReg, Bitfield, Ccmp, Csel,
-        Madd
+        Barrier, LdStReg, LdStPair, LoadUimm, StoreUimm, LdStRegOff, LdStImm, PairV, Pair, DpImm,
+        DpReg, Adr, Adrp, SimdDp, Mrs, Nop, CmpImm, CmpImmW, CmpReg, CmpRegW, AddImmR, SubImmR,
+        MovReg, AddImm, SubImm, AddsImm, SubsImm, MovConst, MovK, LogicImm, LogicReg, AddSubReg,
+        Bitfield, Ccmp, Csel, Madd
     )
 }
 

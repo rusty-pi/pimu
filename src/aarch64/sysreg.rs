@@ -304,6 +304,48 @@ pub(super) fn read<M: Memory + ?Sized>(cpu: &mut Cpu, k: u32, mem: &mut M) -> Re
     })
 }
 
+/// The registers [`read`] answers by name from the core's own state.
+const CORE_REGS: [u32; 22] = [
+    key(3, 3, 4, 2, 0),
+    key(3, 3, 4, 2, 1),
+    key(3, 3, 4, 4, 0),
+    key(3, 3, 4, 4, 1),
+    key(3, 3, 13, 0, 2),
+    key(3, 3, 13, 0, 3),
+    key(3, 3, 0, 0, 7),
+    key(3, 3, 0, 0, 1),
+    key(3, 0, 4, 2, 2),
+    key(3, 0, 4, 2, 0),
+    key(3, 0, 4, 1, 0),
+    key(3, 4, 4, 1, 0),
+    key(3, 6, 4, 1, 0),
+    key(3, 0, 0, 0, 0),
+    key(3, 0, 0, 0, 5),
+    key(3, 0, 0, 0, 6),
+    key(3, 1, 0, 0, 0),
+    key(3, 1, 0, 0, 1),
+    key(3, 1, 0, 0, 7),
+    key(3, 2, 0, 0, 0),
+    key(3, 0, 12, 1, 0),
+    key(3, 6, 12, 0, 1),
+];
+
+/// Whether [`read`] answers `MRS` of `k` from the core alone, never asking
+/// the machine: a straight run goes on through it.
+pub(super) fn core_only(k: u32) -> bool {
+    let (op0, op1, crn, crm) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15, (k >> 3) & 15);
+    if min_el(op0, op1).is_none() {
+        return false;
+    }
+    if op0 == 3 && crn == 14 {
+        return k == key(3, 3, 14, 0, 0);
+    }
+    CORE_REGS.contains(&k)
+        || (op0 == 3 && op1 == 0 && crn == 0 && (1..=7).contains(&crm))
+        || banked(k).is_some()
+        || is_plain(k)
+}
+
 /// `MSR` (register).
 pub(super) fn write<M: Memory + ?Sized>(
     cpu: &mut Cpu,
