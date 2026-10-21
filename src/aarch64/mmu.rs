@@ -551,10 +551,8 @@ impl Cpu {
         };
         let off = va & 0xFFF;
         // Inside the page, which `Memory::host_page` vouched for.
-        unsafe {
-            store_le((h.bytes + off as usize) as *mut u8, size, v);
-            *(h.gen as *mut u64) += 1;
-        }
+        unsafe { store_le((h.bytes + off as usize) as *mut u8, size, v) };
+        mem.bump(h.gen);
         mem.wrote(h.pa | off, size);
         true
     }
@@ -597,7 +595,7 @@ impl Cpu {
         let off = va & 0xFFF;
         if write {
             // Inside the page, which `Memory::host_page` vouched for.
-            unsafe { *(h.gen as *mut u64) += 1 };
+            mem.bump(h.gen);
             mem.wrote(h.pa | off, size);
         }
         Some((h.bytes + off as usize) as *mut u8)

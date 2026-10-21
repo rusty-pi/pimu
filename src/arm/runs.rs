@@ -12,9 +12,10 @@
 //! target, which holds as long as the page's generation does.
 
 use super::ArmBus;
-use crate::aarch64::predecode::{Decoded, RunOp};
+use crate::aarch64::predecode::{Decoded, RunBus, RunOp};
+use std::marker::PhantomData;
 
-const SLOTS_LOG2: u32 = 15;
+const SLOTS_LOG2: u32 = 17;
 /// The most instructions a run holds: a page's.
 pub const MAX_LEN: u64 = 1024;
 /// How many decoded instructions the runs share before they are all dropped
@@ -38,30 +39,33 @@ const EMPTY: Slot = Slot {
     len: 0,
 };
 
-pub struct Runs {
+/// The runs of cores on bus `M`, whose handlers they hold.
+pub struct Runs<M = ArmBus<'static>> {
     slots: Box<[Slot]>,
     /// Never grown past its capacity, so a run's instructions stay where
     /// they are until [`Self::epoch`] moves.
     ops: Vec<RunOp>,
     /// Counts the times every run was dropped at once.
     pub epoch: u64,
+    bus: PhantomData<fn(M)>,
 }
 
 // The generation pointers point into the board's RAM, which outlives every
 // core that runs out of it.
-unsafe impl Send for Runs {}
+unsafe impl<M> Send for Runs<M> {}
 
-impl Default for Runs {
+impl<M> Default for Runs<M> {
     fn default() -> Self {
         Runs {
             slots: vec![EMPTY; 1 << SLOTS_LOG2].into_boxed_slice(),
             ops: Vec::with_capacity(OPS_MAX),
             epoch: 0,
+            bus: PhantomData,
         }
     }
 }
 
-impl Runs {
+impl<M: RunBus> Runs<M> {
     /// The run that starts at `pa`. `code` is its page's words and `genp` its
     /// page's write generation, both from [`crate::mem::Ram`] and valid while
     /// the cores run.
@@ -73,10 +77,12 @@ impl Runs {
         genp: *const u64,
         decoded: &mut Decoded,
     ) -> &[RunOp] {
-        let i = (((pa >> 2) ^ (pa >> 17)) as usize) & ((1 << SLOTS_LOG2) - 1);
-        let s = self.slots[i];
-        if s.pa == pa && s.genp == genp && unsafe { *genp } == s.gen {
-            return &self.ops[s.start as usize..(s.start + s.len) as usize];
+        let i = (((pa >> 1) ^ (pa >> 18)) as usize) & ((1 << SLOTS_LOG2) - 2);
+        for i in [i, i ^ 1] {
+            let s = self.slots[i];
+            if s.pa == pa && s.genp == genp && unsafe { *genp } == s.gen {
+                return &self.ops[s.start as usize..(s.start + s.len) as usize];
+            }
         }
         self.decode(i, pa, code, genp, decoded)
     }
@@ -101,12 +107,17 @@ impl Runs {
         for w in ((pa & 0xFFF) >> 2) as usize..words {
             let op = decoded.get(unsafe { code.add(w).read_unaligned() });
             let last = op.ends_run() || w == words - 1;
-            self.ops.push(RunOp::new::<ArmBus<'static>>(op, last));
+            self.ops.push(RunOp::new::<M>(op, last));
             if last {
                 break;
             }
         }
         let len = self.ops.len() - start;
+        // Two ways a set: the newer run goes first, the older one second,
+        // and the one before that is dropped.
+        if self.slots[i].pa != pa {
+            self.slots[i ^ 1] = self.slots[i];
+        }
         self.slots[i] = Slot {
             pa,
             gen,
@@ -128,7 +139,7 @@ mod tests {
         let mut page = [0x9100_0442u32; 1024];
         page[..3].copy_from_slice(&[0x9100_0400, 0x9100_0421, 0x17FF_FFFE]);
         let mut gen = 7u64;
-        let (mut runs, mut d) = (Runs::default(), Decoded::new());
+        let (mut runs, mut d) = (Runs::<ArmBus>::default(), Decoded::new());
         let run = |runs: &mut Runs, d: &mut Decoded, page: &[u32; 1024], gen: &u64| {
             runs.get(0x8000, page.as_ptr(), gen, d)
                 .iter()
@@ -159,7 +170,7 @@ mod tests {
             .take(1024)
             .collect::<Vec<_>>();
         let gen = 3u64;
-        let (mut runs, mut d) = (Runs::default(), Decoded::new());
+        let (mut runs, mut d) = (Runs::<ArmBus>::default(), Decoded::new());
         let branch: *const RunOp = &runs.get(0x8000, page.as_ptr(), &gen, &mut d)[1];
         let target: *const RunOp = &runs.get(0x8008, page.as_ptr(), &gen, &mut d)[0];
         // The arena stays put while the epoch does.

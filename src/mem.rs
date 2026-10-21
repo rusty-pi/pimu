@@ -414,7 +414,61 @@ impl<M: Map> SharedRam<M> {
                 }
             }
         }
+        self.wrote(off);
         Some(())
+    }
+
+    /// A page a core's straight runs were decoded from has an odd write
+    /// generation ([`Self::code_page`]): a store into it moves it on, which
+    /// they look up again after. Any other page's is left alone, so a store
+    /// costs one load more and no shared cache line.
+    #[inline(always)]
+    fn wrote(&self, off: u64) {
+        let g = self.map.gen(off);
+        if !M::FLAT && g.is_null() {
+            return;
+        }
+        Self::bump(unsafe { AtomicU64::from_ptr(g) });
+    }
+
+    /// The bytes and the write generation of the page at `off`, for a core
+    /// to load and store straight through: `None` where it is not all there.
+    pub fn page(&self, off: u64) -> Option<(*mut u8, *mut u64)> {
+        if !self.fits(off, 1 << PAGE_SHIFT) || self.map.room(off) < 1 << PAGE_SHIFT {
+            return None;
+        }
+        let (p, g) = (self.map.byte(off), self.map.gen(off));
+        (M::FLAT || !(p.is_null() || g.is_null())).then_some((p, g))
+    }
+
+    /// [`Self::wrote`] for a store straight through [`Self::page`], given
+    /// the generation it returned.
+    #[inline(always)]
+    pub fn bump(gen: &AtomicU64) {
+        let v = gen.load(Ordering::Relaxed);
+        if v & 1 != 0 {
+            gen.store(v + 1, Ordering::Release);
+        }
+    }
+
+    /// The page at `off`, which straight runs are about to be decoded from:
+    /// its words and its write generation, made odd so that
+    /// [`Self::store`] moves it. `None` where the page is not all there.
+    pub fn code_page(&self, off: u64) -> Option<(*const u32, *const u64)> {
+        if !self.fits(off, 1 << PAGE_SHIFT) || self.map.room(off) < 1 << PAGE_SHIFT {
+            return None;
+        }
+        let p = self.map.byte(off);
+        let g = self.map.gen(off);
+        if !M::FLAT && (p.is_null() || g.is_null()) {
+            return None;
+        }
+        let a = unsafe { AtomicU64::from_ptr(g) };
+        let v = a.load(Ordering::Acquire);
+        if v & 1 == 0 {
+            a.store(v + 1, Ordering::Release);
+        }
+        Some((p as *const u32, g as *const u64))
     }
 
     /// Store `new` if the location still holds `old`: whether it did. `None`
@@ -451,6 +505,11 @@ impl<M: Map> SharedRam<M> {
                     .compare_exchange(old, new, a, r)
                     .is_ok(),
                 _ => return None,
+            }
+        })
+        .inspect(|&won| {
+            if won {
+                self.wrote(off);
             }
         })
     }
