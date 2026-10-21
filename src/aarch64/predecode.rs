@@ -133,6 +133,13 @@ impl Op {
         (Kind::B as u8..=Kind::Tbz as u8).contains(&(self.kind as u8))
     }
 
+    /// Whether the instruction is a `BR`, `BLR` or `RET`, which a run may go
+    /// on from through [`RunBus::indirect`].
+    #[inline(always)]
+    pub fn indirect_branch(&self) -> bool {
+        self.kind == Kind::BranchReg && self.insn & 0xFF9F_FC1F == 0xD61F_0000
+    }
+
     /// Whether the instruction reads and writes nothing but general
     /// registers and flags, and cannot raise an exception: it needs no PC.
     #[inline(always)]
@@ -767,6 +774,9 @@ pub struct RunOp {
 
 /// What a straight run needs of the bus it runs on.
 pub trait RunBus: Memory {
+    /// Whether [`Self::indirect`] may answer, and its run loop take a
+    /// register branch that ran as the end of the run's chain.
+    const INDIRECT: bool = false;
     /// The load or store at hand happens at cycle `c`.
     fn at(&mut self, c: u64);
     /// Whether the loads and stores so far left nothing for the run loop to
@@ -786,6 +796,11 @@ pub trait RunBus: Memory {
     /// exclusive mark.
     #[cfg(feature = "jit")]
     fn settle(&mut self, gen: u64, genp: *const u64, marked: bool) -> bool;
+    /// The run at `next`, where a `BR`, `BLR` or `RET` `c` cycles in went,
+    /// if the bus knows it and lets the branch go on into it.
+    fn indirect(&mut self, _cpu: &Cpu, _next: u64, _c: u64) -> Option<*const RunOp> {
+        None
+    }
 }
 
 type Go<M> = fn(&mut Cpu, &RunOp, &mut M, u64, u64) -> (u64, u64);
@@ -848,6 +863,7 @@ impl Op {
             Kind::BCond => go_branch::<M, { Kind::BCond as u8 }>,
             Kind::Cbz => go_branch::<M, { Kind::Cbz as u8 }>,
             Kind::Tbz => go_branch::<M, { Kind::Tbz as u8 }>,
+            Kind::BranchReg if M::INDIRECT && self.indirect_branch() => go_indirect::<M>,
             _ => go_stop::<M>,
         }
     }
@@ -923,6 +939,19 @@ pub(super) fn taken<M: RunBus>(
         // A run on this page from its current generation, which stays put.
         let run = unsafe { &*(link as *const RunOp) };
         return run.go(cpu, bus, next, c + 1);
+    }
+    bus.stop(o, next, true);
+    (pc, c)
+}
+
+/// `BR`, `BLR` or `RET`: on into the run at its target where `bus` knows it.
+fn go_indirect<M: RunBus>(cpu: &mut Cpu, o: &RunOp, bus: &mut M, pc: u64, c: u64) -> (u64, u64) {
+    let next = h_branch_reg::<M>(cpu, &o.op, bus, pc);
+    if !cpu.faulted() {
+        if let Some(run) = bus.indirect(cpu, next, c) {
+            // A run of the bus's, which stays put while the bus vouches for it.
+            return unsafe { &*run }.go(cpu, bus, next, c + 1);
+        }
     }
     bus.stop(o, next, true);
     (pc, c)

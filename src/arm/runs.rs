@@ -39,6 +39,47 @@ const EMPTY: Slot = Slot {
     len: 0,
 };
 
+const INDIRECT_LOG2: u32 = 12;
+
+#[derive(Clone, Copy)]
+struct Target {
+    pa: u64,
+    gen: u64,
+    run: *const RunOp,
+    len: usize,
+}
+
+const NO_TARGET: Target = Target {
+    pa: u64::MAX,
+    gen: 0,
+    run: std::ptr::null(),
+    len: 0,
+};
+
+/// The runs looked up lately, by physical address: few enough to stay in
+/// the host's caches, where [`Runs`]' own slots are not.
+pub struct Targets {
+    slots: Box<[Target]>,
+}
+
+impl Targets {
+    #[inline(always)]
+    fn slot(pa: u64) -> usize {
+        ((pa >> 2) ^ (pa >> 14)) as usize & ((1 << INDIRECT_LOG2) - 1)
+    }
+
+    /// The run at `pa`, if its page is still at generation `gen`.
+    #[inline(always)]
+    pub fn get(&self, pa: u64, gen: u64) -> Option<*const RunOp> {
+        let t = self.slots[Self::slot(pa)];
+        (t.pa == pa && t.gen == gen).then_some(t.run)
+    }
+
+    fn clear(&mut self) {
+        self.slots.fill(NO_TARGET);
+    }
+}
+
 /// The runs of cores on bus `M`, whose handlers they hold.
 pub struct Runs<M = ArmBus<'static>> {
     slots: Box<[Slot]>,
@@ -47,6 +88,8 @@ pub struct Runs<M = ArmBus<'static>> {
     ops: Vec<RunOp>,
     /// Counts the times every run was dropped at once.
     pub epoch: u64,
+    /// The runs looked up lately, which go when the runs do.
+    pub targets: Targets,
     bus: PhantomData<fn(M)>,
 }
 
@@ -60,6 +103,9 @@ impl<M> Default for Runs<M> {
             slots: vec![EMPTY; 1 << SLOTS_LOG2].into_boxed_slice(),
             ops: Vec::with_capacity(OPS_MAX),
             epoch: 0,
+            targets: Targets {
+                slots: vec![NO_TARGET; 1 << INDIRECT_LOG2].into_boxed_slice(),
+            },
             bus: PhantomData,
         }
     }
@@ -77,11 +123,25 @@ impl<M: RunBus> Runs<M> {
         genp: *const u64,
         decoded: &mut Decoded,
     ) -> &[RunOp] {
+        let gen = unsafe { *genp };
+        let t = self.targets.slots[Targets::slot(pa)];
+        if t.pa == pa && t.gen == gen {
+            // In `ops`, which stays put until the epoch moves and drops the
+            // targets with it.
+            return unsafe { std::slice::from_raw_parts(t.run, t.len) };
+        }
         let i = (((pa >> 1) ^ (pa >> 18)) as usize) & ((1 << SLOTS_LOG2) - 2);
         for i in [i, i ^ 1] {
             let s = self.slots[i];
-            if s.pa == pa && s.genp == genp && unsafe { *genp } == s.gen {
-                return &self.ops[s.start as usize..(s.start + s.len) as usize];
+            if s.pa == pa && s.genp == genp && gen == s.gen {
+                let run = &self.ops[s.start as usize..(s.start + s.len) as usize];
+                self.targets.slots[Targets::slot(pa)] = Target {
+                    pa,
+                    gen,
+                    run: run.as_ptr(),
+                    len: run.len(),
+                };
+                return run;
             }
         }
         self.decode(i, pa, code, genp, decoded)
@@ -99,6 +159,7 @@ impl<M: RunBus> Runs<M> {
         if self.ops.len() + MAX_LEN as usize > OPS_MAX {
             self.ops.clear();
             self.slots.fill(EMPTY);
+            self.targets.clear();
             self.epoch += 1;
         }
         let start = self.ops.len();
@@ -124,6 +185,12 @@ impl<M: RunBus> Runs<M> {
             genp,
             start: start as u32,
             len: len as u32,
+        };
+        self.targets.slots[Targets::slot(pa)] = Target {
+            pa,
+            gen,
+            run: self.ops[start..].as_ptr(),
+            len,
         };
         &self.ops[start..]
     }

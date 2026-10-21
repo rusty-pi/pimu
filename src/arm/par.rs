@@ -51,7 +51,7 @@ use super::{
     CORES, SPIS, STUB_END,
 };
 use crate::aarch64::predecode::{Decoded, RunBus, RunOp};
-use crate::aarch64::{Abort, Memory, Step};
+use crate::aarch64::{Abort, Cpu, Memory, Step};
 use crate::bus::Width;
 use crate::machine::Machine;
 use crate::mem::SharedRam;
@@ -939,12 +939,14 @@ impl<'a> Worker<'a> {
                 stop_on_store,
                 genp: std::ptr::null(),
                 chain_until: 0,
+                targets: std::ptr::addr_of!(self.runs.targets),
+                moved: false,
             };
             let mut pc = cpu.pc;
             let mut step = None;
             let n_before = n;
             if !cpu.irq_line && !cpu.fiq_line && entered.is_some() && !cpu.stage2_on() {
-                let (el, va_page) = (cpu.el, pc & !0xFFF);
+                let (el, mut va_page) = (cpu.el, pc & !0xFFF);
                 let page = cpu
                     .tlb
                     .code_page(pc, el)
@@ -958,12 +960,12 @@ impl<'a> Worker<'a> {
                         Some((pa, code, gen))
                     });
                 if pc & 3 == 0 {
-                    if let Some((pa_page, code, genp)) = page {
+                    if let Some((mut pa_page, mut code, mut genp)) = page {
                         let effects = cpu.shared_effects;
                         let (runs, decoded) = (&mut *self.runs, &mut *self.decoded);
                         // Odd while runs are decoded from the page, so that a
                         // store into it moves it on (`SharedRam::code_page`).
-                        let gen_of = || {
+                        let gen_of = |genp: *const u64| {
                             let g = unsafe { AtomicU64::from_ptr(genp as *mut u64) };
                             let v = g.load(Ordering::Relaxed);
                             if v & 1 == 0 {
@@ -978,9 +980,22 @@ impl<'a> Worker<'a> {
                         let mut unlinked: Option<*const RunOp> = None;
                         loop {
                             pc = cpu.pc;
-                            if cycles >= limit || n >= next_poll || pc & !0xFFF != va_page {
+                            if cycles >= limit || n >= next_poll || pc & 3 != 0 {
                                 break;
                             }
+                            // Into another page this core has run code from
+                            // under the translation in force: on, without the
+                            // look round the loop above takes.
+                            if pc & !0xFFF != va_page {
+                                let Some((pa, c, g)) = cpu.tlb.code_page(pc, el) else {
+                                    break;
+                                };
+                                (va_page, pa_page) = (pc & !0xFFF, pa);
+                                (code, genp) = (c as *const u32, g as *const u64);
+                                bus.genp = genp;
+                                unlinked = None;
+                            }
+                            let gen = gen_of(genp);
                             let pa = pa_page | (pc & 0xFFF);
                             bus.expect = None;
                             bus.chain_until = chain_end
@@ -990,7 +1005,7 @@ impl<'a> Worker<'a> {
                             let compiled = sh
                                 .jit
                                 .as_ref()
-                                .and_then(|jit| Some((jit, jit.find(pa, gen_of())?)));
+                                .and_then(|jit| Some((jit, jit.find(pa, gen)?)));
                             #[cfg(not(feature = "jit"))]
                             let compiled: Option<&()> = None;
                             let (at, c) = match compiled {
@@ -1001,7 +1016,7 @@ impl<'a> Worker<'a> {
                                     }
                                     unlinked = None;
                                     let mut ctx = crate::aarch64::jit::Ctx {
-                                        gen: gen_of(),
+                                        gen,
                                         marked: 0,
                                         genp,
                                         // Not cut at the next poll, as an
@@ -1018,7 +1033,7 @@ impl<'a> Worker<'a> {
                                     let ops = runs.get(pa, code, genp, decoded);
                                     #[cfg(feature = "jit")]
                                     if let Some(jit) = &sh.jit {
-                                        jit.entered(ops, pa, gen_of());
+                                        jit.entered(ops, pa, gen);
                                     }
                                     let (len, first) = (ops.len() as u64, ops.as_ptr());
                                     if len == 0 || cycles + len > limit {
@@ -1029,10 +1044,15 @@ impl<'a> Worker<'a> {
                                     if let Some(branch) = unlinked.take() {
                                         if runs.epoch == runs_epoch {
                                             // `get` has checked the run against the page.
-                                            unsafe { (*branch).link(first, gen_of()) };
+                                            unsafe { (*branch).link(first, gen) };
                                         }
                                     }
                                     let (at, c) = first.go(cpu, &mut bus, pc, cycles);
+                                    if std::mem::take(&mut bus.moved) {
+                                        // Looked up afresh, as the page the
+                                        // run ended on may be another.
+                                        va_page = u64::MAX;
+                                    }
                                     if bus.ran
                                         && !cpu.faulted()
                                         && unsafe { &*bus.stopped }.op.plain_branch()
@@ -1207,9 +1227,16 @@ struct ParBus<'a> {
     /// branch may go on into a linked run before ([`RunBus::chain`]).
     genp: *const u64,
     chain_until: u64,
+    /// The runs a register branch may go on into ([`RunBus::indirect`]),
+    /// and whether one went into a run on another page since the run loop
+    /// last looked.
+    targets: *const super::runs::Targets,
+    moved: bool,
 }
 
 impl RunBus for ParBus<'_> {
+    const INDIRECT: bool = true;
+
     #[inline(always)]
     fn at(&mut self, c: u64) {
         self.cycles = c;
@@ -1236,6 +1263,21 @@ impl RunBus for ParBus<'_> {
         // `genp` is the runs' page's, from `SharedRam::code_page`.
         c < self.chain_until
             && unsafe { AtomicU64::from_ptr(self.genp as *mut u64) }.load(Ordering::Relaxed) == gen
+    }
+
+    #[inline(always)]
+    fn indirect(&mut self, cpu: &Cpu, next: u64, c: u64) -> Option<*const RunOp> {
+        if c >= self.chain_until || next & 3 != 0 {
+            return None;
+        }
+        let (pa, _, genp) = cpu.tlb.code_page(next, cpu.el)?;
+        // From `SharedRam::code_page`, by way of the run loop.
+        let gen = unsafe { AtomicU64::from_ptr(genp as *mut u64) }.load(Ordering::Relaxed);
+        // The core's own runs, which outlive the bus.
+        let run = unsafe { &*self.targets }.get(pa | (next & 0xFFF), gen)?;
+        self.genp = genp as *const u64;
+        self.moved = true;
+        Some(run)
     }
 
     /// A store-exclusive is never compiled inline, so `marked` has nothing
