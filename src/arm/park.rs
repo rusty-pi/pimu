@@ -399,6 +399,11 @@ impl Park {
         Some(Box::new(park))
     }
 
+    /// The cycle pass 0 starts.
+    pub(super) fn start(&self) -> u64 {
+        self.at
+    }
+
     pub(super) fn pcs(&self) -> &[u64] {
         &self.pcs
     }

@@ -338,6 +338,10 @@ pub struct ArmSide {
     /// `PIMU_NO_BURST=1` takes a lone core through the cycle loop too
     /// ([`Self::burst`]).
     burst_on: bool,
+    /// `PIMU_QUANTUM=<cycles>`: several runnable cores take turns a quantum
+    /// at a time, each through [`Self::burst`], instead of one instruction
+    /// each per cycle. Still repeatable, but a different interleaving.
+    quantum: u64,
     /// `PIMU_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too.
     sha_on: bool,
     /// `PIMU_NO_STRAIGHT=1` steps a burst one instruction at a time.
@@ -489,6 +493,10 @@ impl ArmSide {
             woke: 0,
             park_on: std::env::var_os("PIMU_NO_PARK").is_none(),
             burst_on: std::env::var_os("PIMU_NO_BURST").is_none(),
+            quantum: std::env::var("PIMU_QUANTUM")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             sha_on: std::env::var_os("PIMU_NO_SHA_SKIP").is_none(),
             straight_on: std::env::var_os("PIMU_NO_STRAIGHT").is_none(),
             decoded: Default::default(),
@@ -699,6 +707,13 @@ impl ArmSide {
         let Some(p) = core.park.take() else {
             return;
         };
+        // Under a quantum, another core's turn can reach it from a cycle
+        // before the park began, or after it ran out.
+        let t = if self.quantum != 0 {
+            t.clamp(p.start(), p.until)
+        } else {
+            t
+        };
         debug_assert!(t <= p.until, "core {id} resumed past its park");
         let n = p.resume(&mut core.cpu, m, &core.timer, t);
         core.insns += n;
@@ -818,6 +833,24 @@ impl ArmSide {
                     self.sha_skip(m, id, limit);
                 }
             }
+            if self.quantum != 0
+                && self.burst_on
+                && self.runnable.count_ones() > 1
+                && self.prof.is_none()
+                && !self.blocks_on
+            {
+                let limit = end
+                    .min(self.timer_due)
+                    .min(self.park_due)
+                    .min(self.cycles + self.quantum);
+                if limit > self.cycles {
+                    self.quanta(m, limit);
+                    if self.stop_on_store && self.stored {
+                        break;
+                    }
+                    continue;
+                }
+            }
             // One core takes turns: until something is due, the cycles below
             // would visit just it. A parked core only needs its stores.
             if self.burst_on
@@ -862,6 +895,35 @@ impl ArmSide {
             if self.stop_on_store && self.stored {
                 break;
             }
+        }
+    }
+
+    /// Each runnable core in turn runs from this cycle up to `limit`, as
+    /// though it were alone.
+    fn quanta(&mut self, m: &mut Machine, limit: u64) {
+        let start = self.cycles;
+        let mut ids = self.runnable;
+        while ids != 0 && self.stopped.is_none() {
+            let id = ids.trailing_zeros() as usize;
+            ids &= ids - 1;
+            self.cycles = start;
+            while self.cycles < limit && self.stopped.is_none() && self.runnable & 1 << id != 0 {
+                if self.dirty {
+                    self.sync(m);
+                }
+                if self.cores[id].detect.watching() {
+                    self.take_turns(m, 1 << id);
+                    self.cycles += 1;
+                } else {
+                    self.stopped = self.burst(m, id, limit);
+                }
+                if self.stop_on_store && self.stored {
+                    return;
+                }
+            }
+        }
+        if self.stopped.is_none() {
+            self.cycles = self.cycles.max(limit);
         }
     }
 
