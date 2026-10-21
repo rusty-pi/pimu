@@ -58,10 +58,24 @@ struct Entry {
     /// [`Kind`] bits: EL0's in 0..3, the regime EL's in 3..6.
     perms: u8,
     level: u8,
+    /// Global, or for the ASID of the walk only (`nG`).
+    global: bool,
+    asid: u16,
     pa: u64,
 }
 
 const TLB_ENTRIES: usize = 1024;
+
+/// What a `TLBI` drops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inval {
+    All,
+    /// The 4 KiB page `VA[55:12]`, in every regime and for every ASID, which
+    /// covers what any by-VA `TLBI` asks for.
+    Page(u64),
+    /// What is not global, for this ASID.
+    Asid(u16),
+}
 
 #[derive(Clone)]
 pub struct Tlb {
@@ -69,8 +83,15 @@ pub struct Tlb {
     entries: Box<[Entry]>,
     pub hits: u64,
     pub walks: u64,
-    /// Set by a `TLBI`: the machine is to flush the other cores' TLBs too.
-    pub broadcast: bool,
+    /// The EL1&0 regime's ASID ([`Self::retag`]).
+    asid: u16,
+    /// Whole flushes, those of them a translation register's write made,
+    /// and pages a `TLBI` dropped.
+    pub flushes: u64,
+    pub reshaped: u64,
+    pub drops: u64,
+    /// Set by a broadcast `TLBI`: what the other cores' TLBs are to drop.
+    pub broadcast: Option<Inval>,
     /// The page the last instruction came from, as `(VA page, EL, PA page)`,
     /// which lets [`Cpu::fetch`] skip `translate` entirely. It is only as good
     /// as the translation behind it, so [`Tlb::flush`] drops it too, and the EL
@@ -113,7 +134,7 @@ const NO_HOST: Host = Host {
     pa: 0,
 };
 
-const DATA_HINTS: usize = 32;
+const DATA_HINTS: usize = 256;
 
 /// Where the data hints for an access of `kind` to `va` live: by page, with
 /// higher bits folded in so that regions a power of two apart do not share
@@ -210,7 +231,11 @@ impl Tlb {
             entries: vec![Entry::default(); TLB_ENTRIES].into_boxed_slice(),
             hits: 0,
             walks: 0,
-            broadcast: false,
+            asid: 0,
+            flushes: 0,
+            reshaped: 0,
+            drops: 0,
+            broadcast: None,
             fetch: None,
             data: [NO_HINT; 2 * DATA_HINTS],
             host: [NO_HOST; 2 * DATA_HINTS],
@@ -220,6 +245,7 @@ impl Tlb {
     }
 
     pub fn flush(&mut self) {
+        self.flushes += 1;
         self.fetch = None;
         self.data.fill(NO_HINT);
         self.host.fill(NO_HOST);
@@ -232,13 +258,84 @@ impl Tlb {
         }
     }
 
+    /// What a `TLBI` asks for.
+    pub fn invalidate(&mut self, what: Inval) {
+        match what {
+            Inval::All => self.flush(),
+            Inval::Page(page) => self.drop_page(page),
+            Inval::Asid(asid) => self.drop_asid(asid),
+        }
+    }
+
+    /// Drop what translates the 4 KiB page `page`, as `VA[55:12]`: its own
+    /// entry, and that of any block the entries came from that covers it.
+    /// The hints and host pages are few, and drop whole.
+    fn drop_page(&mut self, page: u64) {
+        const BITS: u64 = (1 << 44) - 1;
+        self.drops += 1;
+        let page = page & BITS;
+        for e in self.entries.iter_mut() {
+            if e.generation != self.generation {
+                continue;
+            }
+            let p = (e.tag >> 2) & BITS;
+            // A level-1 block is 1 GiB, a level-2 one 2 MiB: 18 and 9 bits
+            // of 4 KiB pages.
+            let span = match e.level {
+                1 => 18,
+                2 => 9,
+                _ => 0,
+            };
+            if p >> span == page >> span {
+                e.tag = 0;
+            }
+        }
+        self.fetch = None;
+        self.data.fill(NO_HINT);
+        self.host.fill(NO_HOST);
+        self.code.fill(NO_CODE);
+        self.epoch += 1;
+    }
+
+    /// Ask the other cores to drop `what` too, along with anything asked
+    /// since they last looked.
+    pub fn broadcast(&mut self, what: Inval) {
+        self.broadcast = Some(match self.broadcast {
+            None => what,
+            Some(prev) if prev == what => what,
+            Some(_) => Inval::All,
+        });
+    }
+
     fn slot(tag: u64) -> usize {
         (tag >> 2) as usize & (TLB_ENTRIES - 1)
     }
 
     fn get(&self, tag: u64) -> Option<Entry> {
         let e = self.entries[Self::slot(tag)];
-        (e.tag == tag && e.generation == self.generation).then_some(e)
+        (e.tag == tag && e.generation == self.generation && (e.global || e.asid == self.asid))
+            .then_some(e)
+    }
+
+    /// The EL1&0 regime's ASID is now `asid`, or its tables moved: what is
+    /// kept by VA rather than by ASID drops, the entries stay.
+    pub fn retag(&mut self, asid: u16) {
+        self.asid = asid;
+        self.fetch = None;
+        self.data.fill(NO_HINT);
+        self.host.fill(NO_HOST);
+        self.code.fill(NO_CODE);
+        self.epoch += 1;
+    }
+
+    /// Drop what is not global and was walked for `asid`.
+    fn drop_asid(&mut self, asid: u16) {
+        for e in self.entries.iter_mut() {
+            if !e.global && e.asid == asid {
+                e.tag = 0;
+            }
+        }
+        self.retag(self.asid);
     }
 
     fn put(&mut self, e: Entry) {
@@ -257,6 +354,8 @@ struct Leaf {
     attr_index: u8,
     sh: u8,
     ns: bool,
+    /// `nG` clear: the same for every ASID.
+    global: bool,
 }
 
 /// Is stage 1 on for `regime`? `HCR_EL2.{TGE,DC}` turn it off for non-secure
@@ -398,6 +497,7 @@ fn walk<M: Memory + ?Sized>(s: &SysRegs, mem: &mut M, regime: u8, va: u64) -> Re
             attr_index: (desc >> 2 & 7) as u8,
             sh: (desc >> 8 & 3) as u8,
             ns: desc >> 5 & 1 != 0,
+            global: !two_ranges || desc >> 11 & 1 == 0,
         });
     }
 }
@@ -488,6 +588,8 @@ impl Cpu {
                     generation: 0,
                     perms: leaf.perms,
                     level: leaf.level,
+                    global: leaf.global,
+                    asid: self.tlb.asid,
                     pa: leaf.oa & !0xFFF,
                 };
                 self.tlb.put(e);

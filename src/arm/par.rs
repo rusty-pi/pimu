@@ -166,7 +166,10 @@ struct Shared {
     pending: Line<AtomicU32>,
     slots: [Slot; CORES],
     core: [PerCore; CORES],
+    /// Counts the broadcast `TLBI`s, the last [`TLBIS`] of which are in
+    /// `tlbis` ([`Shared::tlbi`]).
     tlb_gen: Line<AtomicU64>,
+    tlbis: [(AtomicU64, AtomicU64); TLBIS],
     stop_on_store: AtomicBool,
     /// The earliest cycle after a peripheral store since the last
     /// [`ParHost::run_until_store`] began, or `u64::MAX`.
@@ -177,7 +180,52 @@ struct Shared {
     main: Thread,
 }
 
+/// Broadcast `TLBI`s a core can catch up on; one further behind flushes all.
+const TLBIS: usize = 64;
+
 impl Shared {
+    /// Tell the other cores' TLBs to drop `what`.
+    fn tlbi(&self, what: crate::aarch64::mmu::Inval) {
+        use crate::aarch64::mmu::Inval;
+        let n = self.tlb_gen.fetch_add(1, Ordering::AcqRel);
+        let (seq, v) = &self.tlbis[n as usize % TLBIS];
+        // As a seqlock: no reader takes the value while it is being changed.
+        seq.store(0, Ordering::Relaxed);
+        std::sync::atomic::fence(Ordering::Release);
+        v.store(
+            match what {
+                Inval::All => u64::MAX,
+                Inval::Page(p) => p & ((1 << 44) - 1),
+                Inval::Asid(a) => 1 << 62 | u64::from(a),
+            },
+            Ordering::Relaxed,
+        );
+        seq.store(n + 1, Ordering::Release);
+    }
+
+    /// Each broadcast `TLBI` from number `from` up to `to`, or everything
+    /// where one was missed or is not in yet. A core's own come back to it,
+    /// which drops what it dropped already.
+    fn tlbis_since(&self, from: u64, to: u64, mut drop: impl FnMut(crate::aarch64::mmu::Inval)) {
+        use crate::aarch64::mmu::Inval;
+        if to - from > TLBIS as u64 {
+            return drop(Inval::All);
+        }
+        for n in from..to {
+            let (seq, v) = &self.tlbis[n as usize % TLBIS];
+            let before = seq.load(Ordering::Acquire);
+            let v = v.load(Ordering::Relaxed);
+            std::sync::atomic::fence(Ordering::Acquire);
+            if before != n + 1 || seq.load(Ordering::Relaxed) != n + 1 || v == u64::MAX {
+                return drop(Inval::All);
+            }
+            drop(if v >> 62 & 1 != 0 {
+                Inval::Asid(v as u16)
+            } else {
+                Inval::Page(v)
+            });
+        }
+    }
     fn wake(&self, id: usize) {
         if let Some(t) = self.threads[id].get() {
             t.unpark();
@@ -225,6 +273,7 @@ impl ParHost {
             slots: Default::default(),
             core: Default::default(),
             tlb_gen: Line(AtomicU64::new(0)),
+            tlbis: std::array::from_fn(|_| Default::default()),
             stop_on_store: AtomicBool::new(false),
             stored_at: Line(AtomicU64::new(u64::MAX)),
             stopped: AtomicBool::new(false),
@@ -755,8 +804,8 @@ impl<'a> Worker<'a> {
         }
         let gen = sh.tlb_gen.load(Ordering::Acquire);
         if gen != self.tlb_seen {
+            sh.tlbis_since(self.tlb_seen, gen, |what| cpu.tlb.invalidate(what));
             self.tlb_seen = gen;
-            cpu.tlb.flush();
         }
         let hz = sh.hz.load(Ordering::Relaxed);
         if hz != self.hz {
@@ -1019,7 +1068,7 @@ impl<'a> Worker<'a> {
                                 || !bus.plain()
                                 || bus.stored && stop_on_store
                                 || cpu.sev
-                                || cpu.tlb.broadcast
+                                || cpu.tlb.broadcast.is_some()
                                 || cpu.shared_effects != effects
                             {
                                 step = Some(s);
@@ -1093,9 +1142,8 @@ impl<'a> Worker<'a> {
                 sh.stopped.store(true, Ordering::Release);
                 break;
             }
-            if broadcast {
-                sh.tlb_gen.fetch_add(1, Ordering::AcqRel);
-                self.tlb_seen = sh.tlb_gen.load(Ordering::Acquire);
+            if let Some(what) = broadcast {
+                sh.tlbi(what);
                 sh.wake_all();
             }
             if sev {

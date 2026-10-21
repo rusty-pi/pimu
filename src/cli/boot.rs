@@ -2263,6 +2263,14 @@ fn print_arm_cores(emu: &Emulator, eeprom: bool) {
             c.cpu.sp(),
             if c.waiting { "  (wfi)" } else { "" }
         );
+            println!(
+                "            TLB: {} hits, {} walks, {} flushes ({} for a translation register), {} pages dropped",
+                c.cpu.tlb.hits,
+                c.cpu.tlb.walks,
+                c.cpu.tlb.flushes,
+                c.cpu.tlb.reshaped,
+                c.cpu.tlb.drops
+            );
             if c.sha_blocks > 0 {
                 println!(
                 "            {} SHA-256 block loop(s), {} blocks hashed natively (PIMU_NO_SHA_SKIP=1 to compare)",

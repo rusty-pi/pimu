@@ -1439,7 +1439,7 @@ impl ArmSide {
         // Sleepers an event just reached: their runnable bits need a look.
         let mut signalled = 0u32;
         // Most steps have nothing to tell the other cores.
-        let others = if written.is_some() || sev || broadcast {
+        let others = if written.is_some() || sev || broadcast.is_some() {
             self.cores.len()
         } else {
             0
@@ -1459,8 +1459,8 @@ impl ArmSide {
             if event && other.waiting {
                 signalled |= 1 << k;
             }
-            if broadcast {
-                other.cpu.tlb.flush();
+            if let Some(what) = broadcast {
+                other.cpu.tlb.invalidate(what);
             }
         }
         while signalled != 0 {

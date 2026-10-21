@@ -318,18 +318,45 @@ pub(super) fn write<M: Memory + ?Sized>(
     if cpu.el < min {
         return Err(UNDEF);
     }
-    let before = shaping(&cpu.sys);
+    let before = (shaping(&cpu.sys), cpu.sys.ttbr0[1], cpu.sys.ttbr1_el1);
     write_reg(cpu, k, v, mem)?;
-    if shaping(&cpu.sys) != before {
+    if shaping(&cpu.sys) != before.0 {
+        cpu.tlb.reshaped += 1;
         cpu.tlb.flush();
+        cpu.tlb.retag(asid(&cpu.sys));
+    } else if (cpu.sys.ttbr0[1], cpu.sys.ttbr1_el1) != (before.1, before.2) {
+        // The entries the EL1&0 regime walked carry their ASID, as an A72's
+        // do: Linux moves TTBR0 and the ASID on every kernel entry when the
+        // core has no PAN, and would otherwise flush the TLB each time.
+        cpu.tlb.retag(asid(&cpu.sys));
     }
     Ok(())
 }
 
-/// The registers that decide what the TLB holds (`src/aarch64/mmu.rs`).
+/// The registers that decide what the TLB holds (`src/aarch64/mmu.rs`),
+/// but for the EL1&0 regime's TTBRs, which the entries' ASID covers.
 #[allow(clippy::type_complexity)]
-fn shaping(s: &SysRegs) -> ([u64; 4], [u64; 4], [u64; 4], u64, u64, u64) {
-    (s.sctlr, s.tcr, s.ttbr0, s.ttbr1_el1, s.hcr_el2, s.scr_el3)
+fn shaping(s: &SysRegs) -> ([u64; 4], [u64; 4], [u64; 2], u64, u64) {
+    (
+        s.sctlr,
+        s.tcr,
+        [s.ttbr0[2], s.ttbr0[3]],
+        s.hcr_el2,
+        s.scr_el3,
+    )
+}
+
+/// The EL1&0 regime's ASID: from `TTBR1_EL1` or `TTBR0_EL1` as `TCR_EL1.A1`
+/// says, 8 or 16 bits as `TCR_EL1.AS` does.
+fn asid(s: &SysRegs) -> u16 {
+    let tcr = s.tcr[1];
+    let ttbr = if tcr >> 22 & 1 != 0 {
+        s.ttbr1_el1
+    } else {
+        s.ttbr0[1]
+    };
+    let mask = if tcr >> 36 & 1 != 0 { 0xFFFF } else { 0xFF };
+    (ttbr >> 48) as u16 & mask
 }
 
 fn write_reg<M: Memory + ?Sized>(cpu: &mut Cpu, k: u32, v: u64, mem: &mut M) -> Result<(), Stop> {
