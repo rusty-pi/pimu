@@ -433,12 +433,15 @@ impl<M: Map> SharedRam<M> {
 
     /// The bytes and the write generation of the page at `off`, for a core
     /// to load and store straight through: `None` where it is not all there.
+    /// A chunk nothing but zeros went to yet is allocated here, as a core
+    /// asks for the pages it keeps going back to: else every access to a
+    /// page the guest only cleared would go round the slow way.
     pub fn page(&self, off: u64) -> Option<(*mut u8, *mut u64)> {
         if !self.fits(off, 1 << PAGE_SHIFT) || self.map.room(off) < 1 << PAGE_SHIFT {
             return None;
         }
-        let (p, g) = (self.map.byte(off), self.map.gen(off));
-        (M::FLAT || !(p.is_null() || g.is_null())).then_some((p, g))
+        let p = self.map.byte_or_allocate(off);
+        Some((p, self.map.gen(off)))
     }
 
     /// [`Self::wrote`] for a store straight through [`Self::page`], given
@@ -794,6 +797,13 @@ impl<S: Store> Ram<S> {
     pub fn page_bytes(&self, off: u64) -> Option<*mut u8> {
         let p = self.map().byte(off);
         (!p.is_null()).then_some(p)
+    }
+
+    /// [`Self::page_bytes`] for a core to load and store through, allocated
+    /// where nothing but zeros went yet, as [`SharedRam::page`] does.
+    #[inline(always)]
+    pub fn host_bytes(&self, off: u64) -> *mut u8 {
+        self.map().byte_or_allocate(off)
     }
 
     /// [`Self::page_bytes`] as instruction words.

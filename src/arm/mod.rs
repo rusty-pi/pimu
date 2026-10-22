@@ -2368,7 +2368,7 @@ impl crate::aarch64::predecode::RunBus for ArmBus<'_> {
         c < self.chain_until && unsafe { *self.genp } == gen
     }
 
-    #[cfg(feature = "jit")]
+    #[cfg(pimu_compiled)]
     #[inline(always)]
     fn settle(&mut self, gen: u64, genp: *const u64, marked: bool) -> bool {
         if self.io {
@@ -2435,7 +2435,7 @@ impl Memory for ArmBus<'_> {
         if !self.in_ram(pa_page, 0x1000) {
             return None;
         }
-        let bytes = self.m.ram.page_bytes(pa_page)?;
+        let bytes = self.m.ram.host_bytes(pa_page);
         Some((bytes as usize, self.m.ram.gen_ptr(pa_page) as usize))
     }
 
