@@ -222,6 +222,22 @@ MEDIA AND NETWORK:
     --from-log <log>
               With --scenario: check the log of an earlier run, and the
               `<log>.console` beside it, without booting.
+    --from-capture <file>
+              With --scenario: check a UART capture from a real board against
+              the scenario's milestones, without booting. The capture is the
+              raw console, in one file. Milestones marked `model_only` are
+              left out, and there is no golden or retired count to check.
+    --devices <file>
+              With --on: the list of boards, instead of
+              `$XDG_CONFIG_HOME/pimu/devices.yaml`.
+    --on <device>
+              With --scenario: run the scenario on a real board described in
+              `devices.yaml`: stage its `tftp` files in
+              the board's TFTP directory, run the device's `power_cycle`
+              command, read the UART until `until` or `wall_secs`, and check
+              the milestones. A scenario the board cannot run (it fuses OTP,
+              wants another `board_rev`, boots from a card) is skipped. Never
+              part of CI. See docs/running.md.
     --output <log>
               With --scenario: where the combined output goes. For a
               directory of scenarios, the directory the logs go in.
@@ -1060,7 +1076,8 @@ impl BootOpts {
                 )?,
                 "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
                 "--otg-dock" => otg_dock = true,
-                "--scenario" | "--record" | "--plan" | "--from-log" | "--output" => {
+                "--scenario" | "--record" | "--plan" | "--from-log" | "--from-capture" | "--on"
+                | "--devices" | "--output" => {
                     bail!("{a} belongs to --scenario, which `boot` takes out before this point")
                 }
                 "--display" => display = true,

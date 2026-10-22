@@ -10,6 +10,7 @@ mod boot;
 mod check;
 mod config;
 mod disasm;
+mod hardware;
 mod mbox;
 mod otp;
 #[cfg(feature = "repo")]

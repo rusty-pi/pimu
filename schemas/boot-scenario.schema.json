@@ -291,6 +291,11 @@
             "null"
           ]
         },
+        "model_only": {
+          "default": false,
+          "description": "The line comes from the model — its invented identity, its network peer\nor its run report — so a real board never prints it, and a run on one\n(`boot --scenario --on`) leaves this milestone out.",
+          "type": "boolean"
+        },
         "why": {
           "description": "What this proves — quoted verbatim when it fails, and mandatory: it is\nthe half of the regression a golden diff cannot carry.",
           "type": "string"

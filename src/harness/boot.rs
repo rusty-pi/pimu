@@ -244,6 +244,11 @@ pub struct Milestone {
     pub count: Option<usize>,
     #[serde(default)]
     pub max_count: Option<usize>,
+    /// The line comes from the model — its invented identity, its network peer
+    /// or its run report — so a real board never prints it, and a run on one
+    /// (`boot --scenario --on`) leaves this milestone out.
+    #[serde(default)]
+    pub model_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1032,6 +1037,19 @@ pub fn check_milestones(scn: &BootScenario, log: &str) -> Vec<String> {
     failures
 }
 
+/// The milestones against a UART capture from a real board. The model's run
+/// report and its skipped-instruction guard have nothing to read there, and a
+/// board that ran out its wall budget is not a failed run: only what the
+/// console printed counts.
+pub fn check_capture(scn: &BootScenario, capture: &[u8]) -> Vec<String> {
+    let text = transcript(capture);
+    scn.milestones
+        .iter()
+        .filter(|m| !m.model_only)
+        .filter_map(|m| m.check(&text))
+        .collect()
+}
+
 /// Every assertion in the scenario against one boot: `log` is the combined run
 /// log, `console` the normalised transcript.
 pub fn check_run(scn: &BootScenario, log: &str, console: &str) -> Result<Vec<String>> {
@@ -1134,6 +1152,7 @@ mod tests {
             absent: false,
             count: None,
             max_count: None,
+            model_only: false,
         };
         let log = "--- device state ---\n  genet   MAC 00:00:00:00:00:00  tx off  rx off\n";
         let f = m.check(log).expect("the milestone must fail");
@@ -1149,6 +1168,7 @@ mod tests {
             absent: false,
             count: None,
             max_count: None,
+            model_only: false,
         };
         let f2 = m2.check(log).expect("the milestone must fail");
         assert!(!f2.contains("near:"), "{f2}");
@@ -1222,6 +1242,7 @@ mod tests {
             absent: false,
             count: None,
             max_count: None,
+            model_only: false,
         };
         assert!(m.check("  2.14 PM_RSTS 00000020\n").is_none());
         let f = m.check("  2.14 PM_RSTS 00001000\n").expect("should fail");
@@ -1238,6 +1259,7 @@ mod tests {
             absent: false,
             count: Some(n),
             max_count: None,
+            model_only: false,
         };
         assert!(exact(2).check(log).is_none());
         assert!(exact(1).check(log).is_some());
@@ -1248,6 +1270,7 @@ mod tests {
             absent: false,
             count: None,
             max_count: Some(n),
+            model_only: false,
         };
         assert!(at_most(2).check(log).is_none());
         assert!(at_most(1).check(log).is_some());
@@ -1258,6 +1281,7 @@ mod tests {
             absent: true,
             count: None,
             max_count: None,
+            model_only: false,
         };
         assert!(absent.check(log).is_some());
         assert!(absent.check("nothing here\n").is_none());

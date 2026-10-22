@@ -33,9 +33,11 @@ milestones:
 
   - why: "The OTP MAC rows are read the way the firmware reads them: row 65 then the top half of row 64."
     line: "NETWORK: 02:00:5e:00:53:01"
+    model_only: true
 
   - why: "DHCP over the GENET rings: DISCOVER / OFFER / REQUEST / ACK with the peer's PXE boot menu. The gateway is left out: TFTP mode prints 0.0.0.0 whatever option 3 says."
     line: ["NET 192.0.2.100 255.255.255.0 gw ", " tftp 192.0.2.1"]
+    model_only: true
 
   - why: "The bootloader TFTPs all of start4.elf."
     line: "Read start4.elf bytes  2298048"
@@ -48,9 +50,11 @@ milestones:
 
   - why: "The identity is the same however the board booted: same fuses (rows 28/35/30/64/65), same pinned id."
     line: ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
+    model_only: true
 
   - why: "The peer's own record: the kernel went out in full, not only started."
     line: "tftp: kernel8.img sent, 76 bytes"
+    model_only: true
 
   - why: "No nop-slides at all."
     line: "[derail]"
