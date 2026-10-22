@@ -32,7 +32,8 @@ if [[ "${1:-}" == "--nightly" ]]; then
     exit 0
 fi
 
-cargo rustc --release --lib --crate-type cdylib \
+# A table that can grow, for the functions a JIT installs at run time.
+RUSTFLAGS="-C link-arg=--growable-table" cargo rustc --release --lib --crate-type cdylib \
     --target wasm32-unknown-unknown --no-default-features
 wasm-bindgen --target web --out-dir web/pkg \
     target/wasm32-unknown-unknown/release/pimu.wasm
@@ -54,6 +55,7 @@ threads_flags=(
     -C link-arg=--export=__tls_size
     -C link-arg=--export=__tls_align
     -C link-arg=--export=__tls_base
+    -C link-arg=--growable-table
 )
 RUSTFLAGS="${threads_flags[*]}" cargo "+$nightly" rustc --release --lib --crate-type cdylib \
     --target wasm32-unknown-unknown --no-default-features \

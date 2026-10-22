@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>JIT spike</title>
+<!-- The wasm JIT spike (src/web/jit_spike.rs): build modules at run time in a
+     worker, install them in the table and call both ways, in the plain and the
+     threaded build. Needs scripts/build-wasm.sh and an isolated page:
+     PIMU_COI=1 node web/tests/server.mjs, then open /tests/jit-spike.html. -->
+<pre id="out">running</pre>
+<script type="module">
+  import { ThreadPool } from "../threads.mjs";
+  const params = new URLSearchParams(location.search);
+  const out = document.getElementById("out");
+  const pool = new ThreadPool();
+  const worker = new Worker("./jit-spike-worker.mjs", { type: "module" });
+  worker.onmessage = async ({ data }) => {
+    if (data.type === "spawn-threads") {
+      try {
+        await pool.start(data);
+        worker.postMessage({ type: "threads-spawned" });
+      } catch (error) {
+        worker.postMessage({ type: "threads-spawned", error: String(error) });
+      }
+      return;
+    }
+    out.textContent = JSON.stringify(data, null, 1);
+    window.jitSpike = data;
+    if (params.has("report")) fetch("/report", { method: "POST", body: JSON.stringify({ run: params.get("run"), ...data }) });
+  };
+  worker.onerror = (e) => (out.textContent = JSON.stringify({ error: e.message }));
+  worker.postMessage({ type: "start" });
+</script>
