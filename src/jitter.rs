@@ -25,6 +25,7 @@ const TAIL_PERCENT: u64 = 800;
 const SLOW_IN: u64 = 64;
 const SLOW_MAX_PERCENT: u64 = 100_000;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct State {
     seed: u64,
     stretched: usize,

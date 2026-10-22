@@ -80,7 +80,7 @@ const MAX_BUFFER: u32 = 0x1_0000;
 /// carry a value nothing else checks — `reset-raspberrypi` looks only at the
 /// buffer's status word, so a failed VL805 firmware load boots the same —
 /// which is what makes recording it worth the trouble.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct PropertyLog {
     pub replies: u64,
     /// Replies whose buffer-level code is not `0x8000_0000`, success.
@@ -89,7 +89,7 @@ pub struct PropertyLog {
 }
 
 /// One tag's history in a [`PropertyLog`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TagLog {
     pub marked: u64,
     /// Replies that carried it without: an unknown tag, but also
@@ -140,7 +140,7 @@ impl PropertyLog {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Mbox {
     to_arm: VecDeque<u32>,
     to_vpu: VecDeque<u32>,

@@ -65,6 +65,7 @@ const ENDCODE_STALL: u32 = 5;
 /// The interrupt source `vce_obtain_semaphore` enables (68).
 pub const IRQ_SRC: u32 = vce_ctrl::IRQ_VPU;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Vce {
     data: Vec<u8>,
     prog: Vec<u8>,

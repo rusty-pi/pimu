@@ -29,7 +29,7 @@ use crate::periph::cyw43455::Cyw43455;
 use crate::periph::disk::Disk;
 
 /// What is on the bus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CardKind {
     #[default]
     Sd,
@@ -39,7 +39,7 @@ pub enum CardKind {
     Sdio,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CardState {
     Idle,
     Ready,
@@ -172,7 +172,7 @@ const SDIO_VENDOR: u16 = 0x02d0;
 const SDIO_DEVICE: u16 = 0xa9a6;
 
 /// The CMD53 transfer the last command set up.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct IoXfer {
     func: u32,
     addr: u32,
@@ -192,6 +192,7 @@ const TUNING_BLOCK_4BIT: [u8; 64] = [
     0xff, 0xfd, 0xff, 0xfd, 0xdf, 0xff, 0xbf, 0xff, 0xbb, 0xff, 0xf7, 0xff, 0xf7, 0x7f, 0x7b, 0xde,
 ];
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct SdCard {
     disk: Disk,
     kind: CardKind,
@@ -1070,8 +1071,8 @@ fn default_cid() -> u128 {
 /// field is what the SD spec fixes for CSD 2.0, which is also what a real
 /// board's card reports.
 fn csd_v2(blocks: u64) -> u128 {
-    // CSD v2: C_SIZE counts (512 KiB) units, minus 1.
-    let c_size = (blocks / 1024).saturating_sub(1) as u128;
+    // CSD v2: C_SIZE counts (512 KiB) units, minus 1, rounded up to cover the image.
+    let c_size = blocks.div_ceil(1024).saturating_sub(1) as u128;
     let mut csd: u128 = 0;
     csd |= 1 << 126; // [127:126] CSD_STRUCTURE = 1
     csd |= 0x0E << 112; // [119:112] TAAC = 1 ms
@@ -1503,6 +1504,15 @@ mod tests {
         let c_size = 0x3F_FFFFu128 << 48;
         let real = 0x400e_0032_5b59_0000_e927_7f80_0a40_0000u128;
         assert_eq!(csd & !c_size, real & !c_size);
+    }
+
+    #[test]
+    fn a_card_covers_an_image_that_is_not_whole_units() {
+        // The Ubuntu 26.04.1 raspi image: 9605693 sectors, its root partition
+        // ending in the last of them.
+        let blocks = 4_918_114_816 / 512;
+        let c_size = (csd_v2(blocks) >> 48) & 0x3F_FFFF;
+        assert!((c_size as u64 + 1) * 1024 >= blocks);
     }
 
     #[test]

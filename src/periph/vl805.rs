@@ -132,6 +132,7 @@ fn cfg_write_mask(off: usize) -> u32 {
 pub use super::xhci::CAPLENGTH;
 
 /// The VL805 endpoint's configuration space.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Vl805 {
     cfg: Vec<u8>,
     /// The register file behind the indirect index/data port at config

@@ -157,7 +157,8 @@ impl Rig {
             machine.hdmi_ddc0 = crate::periph::HdmiDdc::new("hdmi-ddc0").with_edid(edid);
         }
         if options.check_coherency {
-            machine.ram.coherency = crate::coherency::Coherency::on(self.log.clone());
+            machine.ram.coherency =
+                crate::snap::Keep(crate::coherency::Coherency::on(self.log.clone()));
         }
         if options.check_alignment {
             machine.alignment = crate::align::Alignment::on(self.log.clone());
@@ -280,6 +281,10 @@ pub struct Session {
     console: Vec<u8>,
     log: LogBuffer,
     ended: Option<(bool, String)>,
+    /// One taken at the ARM's release, until the page takes it.
+    snapshot: Option<Vec<u8>>,
+    /// What a loaded snapshot had printed, for the first [`Self::run`].
+    loaded: Vec<u8>,
 }
 
 impl Session {
@@ -343,6 +348,7 @@ impl Session {
             ..Carry::default()
         };
         let mut emu = rig.emulator(&mut carry, 0)?;
+        emu.stop_at_release = rig.options.snapshot;
         let (host, keys) = HostInput::channel();
         emu.input.host = Some(host);
         Ok(Session {
@@ -354,7 +360,24 @@ impl Session {
             console: Vec::new(),
             log: buffer,
             ended: None,
+            snapshot: None,
+            loaded: Vec::new(),
         })
+    }
+
+    /// Go on from a snapshot taken at the ARM's release by a session with
+    /// the same options and images ([`crate::snap`]).
+    pub fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<()> {
+        let console = crate::snap::from_bytes(bytes, &mut self.emu)?;
+        self.emu.stop_at_release = false;
+        self.console = console.clone();
+        self.loaded = console;
+        Ok(())
+    }
+
+    /// The snapshot taken at the ARM's release, once.
+    pub fn take_snapshot(&mut self) -> Option<Vec<u8>> {
+        self.snapshot.take()
     }
 
     /// Run for about `millis` of wall time and return the serial output that
@@ -368,12 +391,25 @@ impl Session {
             max_wall: Some(Duration::from_millis(millis.into())),
             ..RunLimits::default()
         };
-        let report = self.emu.run(&limits);
+        let mut report = self.emu.run(&limits);
         if self.console.len() < CONSOLE_KEPT {
             self.console.extend_from_slice(&report.console);
         }
+        if !self.loaded.is_empty() {
+            let mut console = std::mem::take(&mut self.loaded);
+            console.extend_from_slice(&report.console);
+            report.console = console;
+        }
         match &report.end {
             RunEnd::TimeLimit => {}
+            RunEnd::Released => {
+                match crate::snap::to_bytes(&mut self.emu, &self.console) {
+                    Ok(bytes) => self.snapshot = Some(bytes),
+                    Err(e) => self.log.note("bench", &format!("snapshot: {e:#}")),
+                }
+                self.emu.stop_at_release = false;
+                self.emu.resume_at_release = true;
+            }
             RunEnd::Reset => {
                 if let Err(e) = self.reboot() {
                     self.ended = Some((false, format!("{e:#}")));

@@ -36,8 +36,9 @@ pub const COVERAGE: Coverage = Coverage {
     decoded: &[FIFO_CTL, RAM_PACKET_CONFIG, RAM_PACKET_STATUS, HOTPLUG],
 };
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Hdmi {
-    name: &'static str,
+    name: crate::snap::Keep<&'static str>,
     storage: BTreeMap<u32, u32>,
     recenter_done: bool,
     /// Whether a monitor is on this connector; `boot --display` sets it.
@@ -47,7 +48,7 @@ pub struct Hdmi {
 impl Hdmi {
     pub fn new(name: &'static str) -> Hdmi {
         Hdmi {
-            name,
+            name: crate::snap::Keep(name),
             storage: BTreeMap::new(),
             recenter_done: false,
             connected: false,
@@ -71,7 +72,7 @@ impl Hdmi {
 
 impl MmioDevice for Hdmi {
     fn name(&self) -> &'static str {
-        self.name
+        &self.name
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {

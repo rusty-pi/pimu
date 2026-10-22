@@ -234,6 +234,7 @@ pub fn boot_outcome(
             )
         }
         RunEnd::Quit => return (true, "the session was ended".into()),
+        RunEnd::Released => return (true, "the ARM was released; snapshot saved".into()),
         RunEnd::Halted(Stop::Fault(f)) => return (false, format!("the VPU faulted: {f:x?}")),
         RunEnd::Core1Halted(Stop::Fault(f)) => {
             return (false, format!("VPU core 1 faulted: {f:x?}"))

@@ -122,7 +122,7 @@ fn channel_of(off: u32, base: u32, stride: u32) -> Option<usize> {
     (rel % stride == 0 && rel / stride < CHANNELS as u32).then_some((rel / stride) as usize)
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Hvs {
     storage: BTreeMap<u32, u32>,
     flags: u32,

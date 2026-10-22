@@ -190,7 +190,7 @@ const MDIO_AN_EEE_LPABLE: u16 = 61;
 /// EEE for 100BASE-TX and 1000BASE-T (`ethtool --show-eee`, measured).
 const EEE_100TX_1000T: u16 = 0x0006;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Bcm54213pe {
     /// A cable to a link partner is plugged in.
     link: bool,

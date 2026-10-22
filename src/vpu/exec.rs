@@ -70,7 +70,7 @@ pub enum Fault {
 /// What to do when the core meets an unimplemented instruction — and how
 /// strict it is about the other ways a run wanders off: `bkpt` padding,
 /// `sleep` with no wakeup, a `swi` with no handler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum UnimplPolicy {
     /// Stop with a [`Fault::Unimplemented`], and halt on `bkpt` / `sleep` / an
     /// unhandled `swi`. The default: silence here is silently wrong execution.
@@ -98,7 +98,7 @@ pub enum Step {
 }
 
 /// One unimplemented instruction and its hit count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UnimplHit {
     pub pc: u32,
     pub raw: u128,
@@ -111,11 +111,12 @@ pub struct UnimplHit {
 /// it matches one of a handful of known steppings.
 pub const DEFAULT_VERSION: u32 = crate::soc::Stepping::C0.vpu_version();
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Vpu {
     pub regs: Regs,
     pub cycles: u64,
     pub retired: u64,
+    #[serde(skip)]
     pub stopped: Option<Stop>,
     pub on_unimpl: UnimplPolicy,
     /// Count of instructions skipped under [`UnimplPolicy::Skip`].
@@ -156,6 +157,7 @@ pub struct Vpu {
     /// The vector unit's register file (`src/vpu/vrf.rs`).
     pub vrf: Vrf,
     /// Decoded instructions, per core (`src/vpu/icache.rs`).
+    #[serde(skip)]
     pub icache: DecodeCache,
     /// Ring of recent taken control transfers `(from_pc, to_pc)`. A `VecDeque`
     /// deliberately: dropping the oldest from a `Vec` memmoves the buffer on

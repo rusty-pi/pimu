@@ -37,7 +37,7 @@ pub const IRQ_GIC: u32 = crate::spec::bell::IRQ_GIC_DOORBELL0;
 
 const TO_VPU: usize = 2;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Bell {
     rung: [bool; BELL_COUNT as usize],
     /// Rings per bell, for the run report: a firmware that never rings bell 0

@@ -22,11 +22,12 @@ const LINE_SHIFT: u32 = 5;
 const LINE: u32 = 1 << LINE_SHIFT;
 const LINES: usize = (WINDOW >> LINE_SHIFT) as usize;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CacheAsRam {
     active: bool,
     held: Vec<bool>,
     diverged: Vec<bool>,
+    #[serde(with = "crate::snap::small_ram")]
     behind: Option<Ram>,
 }
 

@@ -11,7 +11,7 @@
 use super::cpu::{Cpu, Exception, Memory, NZCV_C, NZCV_N, NZCV_Z};
 
 /// Why an instruction did not simply retire.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(super) enum Stop {
     Wfi,
     Wfe,
@@ -225,7 +225,7 @@ fn crc32(mut acc: u32, val: u64, bytes: u32, castagnoli: bool) -> u32 {
 
 /// `ConditionHolds` (ARM ARM J1) for each condition, as a truth table over
 /// the 16 values of `NZCV`: bit `nzcv` says whether the condition holds.
-const COND_HOLDS: [u16; 16] = {
+pub(super) const COND_HOLDS: [u16; 16] = {
     let mut t = [0u16; 16];
     let mut cond = 0;
     while cond < 16 {
@@ -310,6 +310,37 @@ impl Cpu {
 
     fn branch_to(&mut self, target: u64) {
         self.next_pc = target;
+    }
+}
+
+/// What `TLBI` `op1`, `CRm`, `op2` with `Xt` drops: one page for the by-VA
+/// forms where the regime's pages are 4 KiB, which is what a block entry is
+/// dropped by too; the whole TLB for the rest.
+fn tlbi(cpu: &Cpu, op1: u32, crm: u32, op2: u32, rt: u32) -> crate::aarch64::mmu::Inval {
+    use crate::aarch64::mmu::Inval;
+    let by_va = matches!(crm, 3 | 7)
+        && match op1 {
+            0 => matches!(op2, 1 | 3 | 5 | 7),
+            _ => matches!(op2, 1 | 5),
+        };
+    let tcr = cpu.sys.tcr[match op1 {
+        0 => 1,
+        4 => 2,
+        _ => 3,
+    }];
+    // TG0 4 KiB, and for EL1&0 TG1 4 KiB too.
+    let four_k = tcr >> 14 & 3 == 0 && (op1 != 0 || tcr >> 30 & 3 == 2);
+    if by_va && four_k {
+        Inval::Page(cpu.xr(rt, true))
+    } else if op1 == 0 && op2 == 2 && matches!(crm, 3 | 7) {
+        let mask = if cpu.sys.tcr[1] >> 36 & 1 != 0 {
+            0xFFFF
+        } else {
+            0xFF
+        };
+        Inval::Asid((cpu.xr(rt, true) >> 48) as u16 & mask)
+    } else {
+        Inval::All
     }
 }
 
@@ -680,8 +711,12 @@ fn sys<M: Memory + ?Sized>(
         _ if cpu.el == 0 => undef(),
         (0, 7, 6 | 10 | 14, 1 | 2) | (0, 7, 5 | 1, 0) => Ok(()),
         (0 | 4 | 6, 8, _, _) if op1 / 2 <= cpu.el => {
-            cpu.tlb.flush();
-            cpu.tlb.broadcast = true;
+            let what = tlbi(cpu, op1, crm, op2, rt);
+            cpu.tlb.invalidate(what);
+            // The Inner Shareable forms reach the other cores.
+            if crm == 3 {
+                cpu.tlb.broadcast(what);
+            }
             Ok(())
         }
         // AT S1E1R/W, S1E0R/W; S1E2R/W and S12E1*/S12E0* from EL2; S1E3R/W.

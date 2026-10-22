@@ -49,6 +49,9 @@ pub struct Options {
     pub skip_unimpl: bool,
     /// Run the ARM cores on worker threads, if the page started any.
     pub parallel: bool,
+    /// Save a snapshot when the ARM is released ([`crate::snap`]), for the
+    /// page to start the next boot from.
+    pub snapshot: bool,
 }
 
 impl Options {

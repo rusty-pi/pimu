@@ -35,8 +35,9 @@ pub const COVERAGE: Coverage = Coverage {
 
 const STA_W1C: u32 = 0x13C;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Pwm {
-    name: &'static str,
+    name: crate::snap::Keep<&'static str>,
     storage: BTreeMap<u32, u32>,
     sta: u32,
 }
@@ -44,7 +45,7 @@ pub struct Pwm {
 impl Pwm {
     pub fn new(name: &'static str) -> Pwm {
         Pwm {
-            name,
+            name: crate::snap::Keep(name),
             storage: BTreeMap::from([
                 (DMAC, DMAC_RESET),
                 (RNG1, RNG1_RESET),
@@ -59,7 +60,7 @@ impl Pwm {
 
 impl MmioDevice for Pwm {
     fn name(&self) -> &'static str {
-        self.name
+        &self.name
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {

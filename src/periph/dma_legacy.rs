@@ -59,7 +59,7 @@ pub const COVERAGE_VPU: Coverage = Coverage {
     ],
 };
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct DmaLegacy {
     /// Whether offsets `>= 0xFE0` are the controller-wide INT_STATUS / ENABLE
     /// words. True for the `0x7E00_7000` controller; false for the `0x7EE0_4100`

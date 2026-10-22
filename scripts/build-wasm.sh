@@ -42,9 +42,11 @@ if [[ "${1:-}" == "--no-threads" ]]; then
 fi
 
 # Shared memory of up to 4 GiB, the most a 32-bit memory can have; the TLS
-# exports are what wasm-bindgen sets each thread up with.
+# exports are what wasm-bindgen sets each thread up with. Tail calls carry a
+# straight run from one instruction's handler into the next (`pimu_tail` in
+# build.rs) instead of a call frame per instruction.
 threads_flags=(
-    -C target-feature=+atomics,+bulk-memory,+mutable-globals
+    -C target-feature=+atomics,+bulk-memory,+mutable-globals,+tail-call
     -C link-arg=--shared-memory
     -C link-arg=--import-memory
     -C link-arg=--max-memory=4294967296

@@ -43,7 +43,7 @@ pub const COVERAGE: Coverage = Coverage {
 
 pub const TI_INTEN: u32 = 1 << 0;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Dma4 {
     cs: u32,
     cb: u32,

@@ -43,7 +43,7 @@ pub const COVERAGE: Coverage = Coverage {
 /// `src - SYS_IRQ_SRC`).
 pub const SYS_IRQ_SRC: u32 = crate::spec::systimer::IRQ_VPU_C0;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CoreCtl {
     /// Per core: the source being vectored and the priority it was enabled at.
     /// The priority is latched at delivery because a handler may rewrite

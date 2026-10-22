@@ -169,6 +169,7 @@ pub fn row_meaning(row: u32) -> String {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ConfigOtp {
     storage: BTreeMap<u32, u32>,
     key: u32,

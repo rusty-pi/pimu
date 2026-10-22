@@ -27,6 +27,14 @@
 //! in. A core asleep in `wfi` or `wfe` sits out its time and catches up to the
 //! VPU's clock when it wakes.
 //!
+//! Staying within a window is not enough for the system counter, which is one
+//! counter on the board: a core behind the others would read it lower than one
+//! of them already did, and Linux's arm64 vDSO turns a reading below the
+//! timekeeper's `cycle_last` into a clock minutes ahead. So a read of
+//! `CNTPCT`/`CNTVCT` is never less than the highest any core has read
+//! ([`Shared::counter_read`]); the timers still compare against the core's own
+//! clock, and so fire up to a window late.
+//!
 //! While the VPU sleeps for a long stretch (`sleep`, a `udelay` fast-forward),
 //! [`ParHost::run_until_store`] lets the cores run up to its wake-up and ends
 //! the wait at the first peripheral store, as the lock-step run does.
@@ -50,7 +58,8 @@ use super::{
     device_read, device_write, route, spi_levels, spi_stamp, wfe_timeout, ArmStop, Core, Target,
     CORES, SPIS, STUB_END,
 };
-use crate::aarch64::{Abort, Memory, Step};
+use crate::aarch64::predecode::{Decoded, RunBus, RunOp};
+use crate::aarch64::{Abort, Cpu, Memory, Step};
 use crate::bus::Width;
 use crate::machine::Machine;
 use crate::mem::SharedRam;
@@ -149,6 +158,9 @@ impl Default for PerCore {
 /// What the machine's thread and the cores' threads share.
 struct Shared {
     ram: SharedRam,
+    /// The runs compiled for every core.
+    #[cfg(feature = "jit")]
+    jit: Option<crate::aarch64::jit::Shared>,
     ram_len: u64,
     quit: AtomicBool,
     /// The machine is gone: stop waiting for it.
@@ -162,18 +174,79 @@ struct Shared {
     pending: Line<AtomicU32>,
     slots: [Slot; CORES],
     core: [PerCore; CORES],
+    /// Counts the broadcast `TLBI`s, the last [`TLBIS`] of which are in
+    /// `tlbis` ([`Shared::tlbi`]).
     tlb_gen: Line<AtomicU64>,
+    tlbis: [(AtomicU64, AtomicU64); TLBIS],
     stop_on_store: AtomicBool,
     /// The earliest cycle after a peripheral store since the last
     /// [`ParHost::run_until_store`] began, or `u64::MAX`.
     stored_at: Line<AtomicU64>,
     stopped: AtomicBool,
+    /// The highest `CNTPCT` a core has read ([`Shared::counter_read`]).
+    counted: Line<AtomicU64>,
     stop: Mutex<Option<ArmStop>>,
     threads: [OnceLock<Thread>; CORES],
     main: Thread,
 }
 
+/// Broadcast `TLBI`s a core can catch up on; one further behind flushes all.
+const TLBIS: usize = 64;
+
 impl Shared {
+    /// Tell the other cores' TLBs to drop `what`.
+    fn tlbi(&self, what: crate::aarch64::mmu::Inval) {
+        use crate::aarch64::mmu::Inval;
+        let n = self.tlb_gen.fetch_add(1, Ordering::AcqRel);
+        let (seq, v) = &self.tlbis[n as usize % TLBIS];
+        // As a seqlock: no reader takes the value while it is being changed.
+        seq.store(0, Ordering::Relaxed);
+        std::sync::atomic::fence(Ordering::Release);
+        v.store(
+            match what {
+                Inval::All => u64::MAX,
+                Inval::Page(p) => p & ((1 << 44) - 1),
+                Inval::Asid(a) => 1 << 62 | u64::from(a),
+            },
+            Ordering::Relaxed,
+        );
+        seq.store(n + 1, Ordering::Release);
+    }
+
+    /// Each broadcast `TLBI` from number `from` up to `to`, or everything
+    /// where one was missed or is not in yet. A core's own come back to it,
+    /// which drops what it dropped already.
+    fn tlbis_since(&self, from: u64, to: u64, mut drop: impl FnMut(crate::aarch64::mmu::Inval)) {
+        use crate::aarch64::mmu::Inval;
+        if to - from > TLBIS as u64 {
+            return drop(Inval::All);
+        }
+        for n in from..to {
+            let (seq, v) = &self.tlbis[n as usize % TLBIS];
+            let before = seq.load(Ordering::Acquire);
+            let v = v.load(Ordering::Relaxed);
+            std::sync::atomic::fence(Ordering::Acquire);
+            if before != n + 1 || seq.load(Ordering::Relaxed) != n + 1 || v == u64::MAX {
+                return drop(Inval::All);
+            }
+            drop(if v >> 62 & 1 != 0 {
+                Inval::Asid(v as u16)
+            } else {
+                Inval::Page(v)
+            });
+        }
+    }
+
+    /// What the system counter reads for a core whose own clock puts it at
+    /// `count`: never less than any core has read before.
+    fn counter_read(&self, count: u64) -> u64 {
+        let seen = self.counted.load(Ordering::Acquire);
+        if count <= seen {
+            return seen;
+        }
+        self.counted.fetch_max(count, Ordering::AcqRel).max(count)
+    }
+
     fn wake(&self, id: usize) {
         if let Some(t) = self.threads[id].get() {
             t.unpark();
@@ -208,6 +281,7 @@ impl ParHost {
             .systimer
             .cycles_at(gentimer::ARM_HZ)
             .saturating_sub(released_at);
+        let counted = cores.iter().map(|c| c.par_counted).max().unwrap_or(0);
         let sh = Arc::new(Shared {
             ram,
             ram_len,
@@ -221,12 +295,16 @@ impl ParHost {
             slots: Default::default(),
             core: Default::default(),
             tlb_gen: Line(AtomicU64::new(0)),
+            tlbis: std::array::from_fn(|_| Default::default()),
             stop_on_store: AtomicBool::new(false),
             stored_at: Line(AtomicU64::new(u64::MAX)),
             stopped: AtomicBool::new(false),
+            counted: Line(AtomicU64::new(counted)),
             stop: Mutex::new(None),
             threads: Default::default(),
             main: std::thread::current(),
+            #[cfg(feature = "jit")]
+            jit: crate::aarch64::jit::Shared::new::<ParBus<'static>>(),
         });
         let mut host = ParHost {
             sh: sh.clone(),
@@ -463,9 +541,8 @@ impl ParHost {
 
     /// Move the VPU's clock, and with it the cores' limit, towards `end` as
     /// fast as the slowest awake core and the earliest sleeper's wake-up
-    /// allow, never more than a window past either. The cores stay within a
-    /// window of each other, so a guest that moves from one to another never
-    /// sees the counter go back.
+    /// allow, never more than a window past either, so the cores stay within
+    /// a window of each other.
     fn advance_towards(&mut self, end: u64) {
         let sh = &self.sh;
         let base = (0..self.n)
@@ -632,6 +709,10 @@ struct Worker<'a> {
     tlb_seen: u64,
     hz: u64,
     poll: Poll,
+    /// The straight runs this core decoded, the way a lone core's are
+    /// (`super::runs`), and the instruction words behind them.
+    runs: Box<super::runs::Runs<ParBus<'static>>>,
+    decoded: Box<Decoded>,
 }
 
 /// The last device read, and how many times in a row it came back the same.
@@ -654,6 +735,8 @@ impl<'a> Worker<'a> {
             tlb_seen: sh.tlb_gen.load(Ordering::Acquire),
             hz: u64::MAX,
             poll: Poll::default(),
+            runs: Default::default(),
+            decoded: Box::new(Decoded::new()),
         }
     }
 
@@ -695,6 +778,7 @@ impl<'a> Worker<'a> {
         }
         sh.core[id].cycles.store(self.cycles, Ordering::Release);
         self.core.par_cycles = self.cycles;
+        self.core.par_counted = sh.counted.load(Ordering::Acquire);
         self.core
     }
 
@@ -743,8 +827,8 @@ impl<'a> Worker<'a> {
         }
         let gen = sh.tlb_gen.load(Ordering::Acquire);
         if gen != self.tlb_seen {
+            sh.tlbis_since(self.tlb_seen, gen, |what| cpu.tlb.invalidate(what));
             self.tlb_seen = gen;
-            cpu.tlb.flush();
         }
         let hz = sh.hz.load(Ordering::Relaxed);
         if hz != self.hz {
@@ -826,6 +910,7 @@ impl<'a> Worker<'a> {
         let mut n = 0u64;
         let mut next_poll = 0u64;
         let mut cycles = self.cycles;
+        let stop_on_store = sh.stop_on_store.load(Ordering::Relaxed);
         loop {
             if n >= next_poll {
                 next_poll = n + POLL_MASK + 1;
@@ -871,36 +956,162 @@ impl<'a> Worker<'a> {
                 gone: false,
                 poll: &mut self.poll,
                 skip: 0,
+                stopped: std::ptr::null(),
+                next: 0,
+                ran: false,
+                stop_on_store,
+                genp: std::ptr::null(),
+                chain_until: 0,
+                targets: std::ptr::addr_of!(self.runs.targets),
+                moved: false,
             };
             let mut pc = cpu.pc;
             let mut step = None;
             let n_before = n;
-            if !cpu.irq_line && !cpu.fiq_line && entered.is_some() {
-                if let Some((va_page, el, pa_page)) = cpu.tlb.fetch_hint() {
-                    if el == cpu.el && va_page == pc & !0xFFF && pc & 3 == 0 {
+            if !cpu.irq_line && !cpu.fiq_line && entered.is_some() && !cpu.stage2_on() {
+                let (el, mut va_page) = (cpu.el, pc & !0xFFF);
+                let page = cpu
+                    .tlb
+                    .code_page(pc, el)
+                    .map(|(pa, code, gen)| (pa, code as *const u32, gen as *const u64))
+                    .or_else(|| {
+                        let (hint, hint_el, pa) = cpu.tlb.fetch_hint()?;
+                        (hint_el == el && hint == va_page).then_some(())?;
+                        let (code, gen) = sh.ram.code_page(pa)?;
+                        cpu.tlb
+                            .remember_code(pc, el, pa, code as usize, gen as usize);
+                        Some((pa, code, gen))
+                    });
+                if pc & 3 == 0 {
+                    if let Some((mut pa_page, mut code, mut genp)) = page {
                         let effects = cpu.shared_effects;
+                        let (runs, decoded) = (&mut *self.runs, &mut *self.decoded);
+                        // Odd while runs are decoded from the page, so that a
+                        // store into it moves it on (`SharedRam::code_page`).
+                        let gen_of = |genp: *const u64| {
+                            let g = unsafe { AtomicU64::from_ptr(genp as *mut u64) };
+                            let v = g.load(Ordering::Relaxed);
+                            if v & 1 == 0 {
+                                g.store(v + 1, Ordering::Release);
+                            }
+                            v | 1
+                        };
+                        // A linked run fits before the limit from this far before it.
+                        let chain_end = limit.saturating_sub(super::runs::MAX_LEN);
+                        bus.genp = genp;
+                        // The taken branch to link to the run looked up next.
+                        let mut unlinked: Option<*const RunOp> = None;
                         loop {
                             pc = cpu.pc;
-                            if cycles >= limit || pc & !0xFFF != va_page {
+                            if cycles >= limit || n >= next_poll || pc & 3 != 0 {
                                 break;
                             }
-                            let Ok(insn) = bus.fetch(pa_page | (pc & 0xFFF)) else {
-                                break;
-                            };
-                            bus.cycles = cycles;
+                            // Into another page this core has run code from
+                            // under the translation in force: on, without the
+                            // look round the loop above takes.
+                            if pc & !0xFFF != va_page {
+                                let Some((pa, c, g)) = cpu.tlb.code_page(pc, el) else {
+                                    break;
+                                };
+                                (va_page, pa_page) = (pc & !0xFFF, pa);
+                                (code, genp) = (c as *const u32, g as *const u64);
+                                bus.genp = genp;
+                                unlinked = None;
+                            }
+                            let gen = gen_of(genp);
+                            let pa = pa_page | (pc & 0xFFF);
                             bus.expect = None;
-                            let s = match cpu.step_fetched(insn, &mut bus) {
-                                Step::Exception(e) => {
-                                    cpu.take_sync(e);
-                                    Step::Took(e)
+                            bus.chain_until = chain_end
+                                .min(cycles + super::runs::MAX_LEN)
+                                .min(cycles + (next_poll - n));
+                            #[cfg(feature = "jit")]
+                            let compiled = sh
+                                .jit
+                                .as_ref()
+                                .and_then(|jit| Some((jit, jit.find(pa, gen)?)));
+                            #[cfg(not(feature = "jit"))]
+                            let compiled: Option<&()> = None;
+                            let (at, c) = match compiled {
+                                #[cfg(feature = "jit")]
+                                Some((jit, t)) => {
+                                    if cycles + t.len > limit {
+                                        break;
+                                    }
+                                    unlinked = None;
+                                    let mut ctx = crate::aarch64::jit::Ctx {
+                                        gen,
+                                        marked: 0,
+                                        genp,
+                                        // Not cut at the next poll, as an
+                                        // interpreted link is: the poll just
+                                        // comes after.
+                                        chain_until: chain_end.min(cycles + super::runs::MAX_LEN),
+                                    };
+                                    t.go(jit.enter(), cpu, &mut bus, &mut ctx, pc, cycles)
                                 }
-                                s => s,
+                                #[cfg(not(feature = "jit"))]
+                                Some(_) => unreachable!(),
+                                None => {
+                                    let runs_epoch = runs.epoch;
+                                    let ops = runs.get(pa, code, genp, decoded);
+                                    #[cfg(feature = "jit")]
+                                    if let Some(jit) = &sh.jit {
+                                        jit.entered(ops, pa, gen);
+                                    }
+                                    let (len, first) = (ops.len() as u64, ops.as_ptr());
+                                    if len == 0 || cycles + len > limit {
+                                        break;
+                                    }
+                                    // Stays put while `runs.epoch` does.
+                                    let first = unsafe { &*first };
+                                    if let Some(branch) = unlinked.take() {
+                                        if runs.epoch == runs_epoch {
+                                            // `get` has checked the run against the page.
+                                            unsafe { (*branch).link(first, gen) };
+                                        }
+                                    }
+                                    let (at, c) = first.go(cpu, &mut bus, pc, cycles);
+                                    if std::mem::take(&mut bus.moved) {
+                                        // Looked up afresh, as the page the
+                                        // run ended on may be another.
+                                        va_page = u64::MAX;
+                                    }
+                                    if bus.ran
+                                        && !cpu.faulted()
+                                        && unsafe { &*bus.stopped }.op.plain_branch()
+                                        && bus.next != at.wrapping_add(4)
+                                        && bus.next & !0xFFF == va_page
+                                    {
+                                        unlinked = Some(bus.stopped);
+                                    }
+                                    (at, c)
+                                }
+                            };
+                            let op: &RunOp = unsafe { &*bus.stopped };
+                            *insns += c - cycles;
+                            n += c - cycles;
+                            cycles = c;
+                            pc = at;
+                            let s = if !bus.ran {
+                                bus.cycles = cycles;
+                                let next = op.op.handler()(cpu, &op.op, &mut bus, pc);
+                                if cpu.faulted() {
+                                    cpu.stopped_at(pc, next, &op.op)
+                                } else {
+                                    cpu.pc = next;
+                                    Step::Retired
+                                }
+                            } else if cpu.faulted() {
+                                cpu.stopped_at(pc, bus.next, &op.op)
+                            } else {
+                                cpu.pc = bus.next;
+                                Step::Retired
                             };
                             if !matches!(s, Step::Retired)
-                                || bus.io
-                                || bus.timer_written
+                                || !bus.plain()
+                                || bus.stored && stop_on_store
                                 || cpu.sev
-                                || cpu.tlb.broadcast
+                                || cpu.tlb.broadcast.is_some()
                                 || cpu.shared_effects != effects
                             {
                                 step = Some(s);
@@ -909,7 +1120,7 @@ impl<'a> Worker<'a> {
                             *insns += 1;
                             cycles += 1;
                             n += 1;
-                            if cpu.pc != pc.wrapping_add(4) {
+                            if cpu.el != el {
                                 break;
                             }
                         }
@@ -974,9 +1185,8 @@ impl<'a> Worker<'a> {
                 sh.stopped.store(true, Ordering::Release);
                 break;
             }
-            if broadcast {
-                sh.tlb_gen.fetch_add(1, Ordering::AcqRel);
-                self.tlb_seen = sh.tlb_gen.load(Ordering::Acquire);
+            if let Some(what) = broadcast {
+                sh.tlbi(what);
                 sh.wake_all();
             }
             if sev {
@@ -1031,6 +1241,77 @@ struct ParBus<'a> {
     gone: bool,
     poll: &'a mut Poll,
     skip: u64,
+    /// Where a straight run stopped ([`RunBus::stop`]).
+    stopped: *const RunOp,
+    next: u64,
+    ran: bool,
+    stop_on_store: bool,
+    /// The write generation of the page the runs are from, and the cycle a
+    /// branch may go on into a linked run before ([`RunBus::chain`]).
+    genp: *const u64,
+    chain_until: u64,
+    /// The runs a register branch may go on into ([`RunBus::indirect`]),
+    /// and whether one went into a run on another page since the run loop
+    /// last looked.
+    targets: *const super::runs::Targets,
+    moved: bool,
+}
+
+impl RunBus for ParBus<'_> {
+    const INDIRECT: bool = true;
+
+    #[inline(always)]
+    fn at(&mut self, c: u64) {
+        self.cycles = c;
+    }
+
+    #[inline(always)]
+    fn plain(&self) -> bool {
+        !self.io
+            && !self.timer_written
+            && !self.gone
+            && self.skip == 0
+            && !(self.stored && self.stop_on_store)
+    }
+
+    #[inline(always)]
+    fn stop(&mut self, op: &RunOp, next: u64, ran: bool) {
+        self.stopped = op;
+        self.next = next;
+        self.ran = ran;
+    }
+
+    #[inline(always)]
+    fn chain(&self, c: u64, gen: u64) -> bool {
+        // `genp` is the runs' page's, from `SharedRam::code_page`.
+        c < self.chain_until
+            && unsafe { AtomicU64::from_ptr(self.genp as *mut u64) }.load(Ordering::Relaxed) == gen
+    }
+
+    #[inline(always)]
+    fn indirect(&mut self, cpu: &Cpu, next: u64, c: u64) -> Option<*const RunOp> {
+        if c >= self.chain_until || next & 3 != 0 {
+            return None;
+        }
+        let (pa, _, genp) = cpu.tlb.code_page(next, cpu.el)?;
+        // From `SharedRam::code_page`, by way of the run loop.
+        let gen = unsafe { AtomicU64::from_ptr(genp as *mut u64) }.load(Ordering::Relaxed);
+        // The core's own runs, which outlive the bus.
+        let run = unsafe { &*self.targets }.get(pa | (next & 0xFFF), gen)?;
+        self.genp = genp as *const u64;
+        self.moved = true;
+        Some(run)
+    }
+
+    /// A store-exclusive is never compiled inline, so `marked` has nothing
+    /// to say here: the compare-exchange is the bus's.
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    fn settle(&mut self, gen: u64, genp: *const u64, _: bool) -> bool {
+        // The page's generation, from `SharedRam::code_page`.
+        self.plain()
+            && unsafe { AtomicU64::from_ptr(genp as *mut u64) }.load(Ordering::Relaxed) == gen
+    }
 }
 
 /// Post a request in core `id`'s slot and wait for the machine's thread to
@@ -1206,7 +1487,9 @@ impl Memory for ParBus<'_> {
     }
 
     fn sysreg_read(&mut self, key: u32) -> Option<u64> {
-        super::timer_reg(key).map(|r| self.timer.read(r, self.cycles))
+        let r = super::timer_reg(key)?;
+        let now = self.sh.counter_read(self.timer.count(self.cycles));
+        Some(self.timer.read_counting(r, self.cycles, now))
     }
 
     fn sysreg_write(&mut self, key: u32, value: u64) -> bool {
@@ -1222,6 +1505,29 @@ impl Memory for ParBus<'_> {
 
     fn barrier(&mut self) {
         std::sync::atomic::fence(Ordering::SeqCst);
+    }
+
+    /// Not while a store-exclusive is under way, which has to be the bus's
+    /// compare-exchange.
+    #[inline(always)]
+    fn direct(&self) -> bool {
+        self.expect.is_none()
+    }
+
+    fn host_page(&mut self, pa_page: u64) -> Option<(usize, usize)> {
+        let end = pa_page + 0x1000;
+        if end > self.sh.ram_len || !(end <= super::RAM_LOW_END || pa_page >= super::RAM_HIGH_BASE)
+        {
+            return None;
+        }
+        let (bytes, gen) = self.sh.ram.page(pa_page)?;
+        Some((bytes as usize, gen as usize))
+    }
+
+    #[inline(always)]
+    fn bump(&mut self, gen: usize) {
+        // A generation `host_page` handed out, inside the board's RAM.
+        SharedRam::<crate::mem::DefaultMap>::bump(unsafe { AtomicU64::from_ptr(gen as *mut u64) });
     }
 
     fn expect_unchanged(&mut self, expected: u64) {

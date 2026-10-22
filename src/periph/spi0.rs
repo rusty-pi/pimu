@@ -88,7 +88,7 @@ const CE_ALT: u8 = 0xC7;
 const WRITE_CMDS: [u8; 7] = [PP, SE, BE32, BE64, CE, CE_ALT, WRSR];
 
 /// Where the flash's chip select comes from, which is what GPIO 43 is set to.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum ChipSelect {
     /// GPIO 43 is somebody else's, or an input: nothing selects the flash.
     #[default]
@@ -100,7 +100,7 @@ pub enum ChipSelect {
     Gpio(bool),
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Spi0 {
     cs: u32,
     clk: u32,

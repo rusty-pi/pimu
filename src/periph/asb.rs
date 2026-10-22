@@ -38,7 +38,7 @@ pub const COVERAGE: Coverage = Coverage {
 /// Number of `*_CTRL` registers: three blocks, slave and master port each.
 const BRIDGES: usize = CTRL_COUNT as usize;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Asb {
     /// Per-bridge `REQ_STOP`. `ACK` is derived from it, never stored.
     stopped: [bool; BRIDGES],

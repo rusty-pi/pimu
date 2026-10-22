@@ -184,6 +184,7 @@ const DMP_DESC_EOT: u32 = 0xF;
 const DMP_SLAVE_TYPE_SLAVE: u32 = 0;
 const DMP_SLAVE_TYPE_SWRAP: u32 = 2;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Cyw43455 {
     f1: [u8; 0x20],
     window: u32,

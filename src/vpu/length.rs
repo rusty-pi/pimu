@@ -24,7 +24,7 @@ pub const fn insn_len_parcels(first_parcel: u16) -> usize {
 
 /// Instruction class implied purely by the first parcel. Useful for tracing and
 /// for routing to the right decoder table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InsnClass {
     Scalar16,
     Scalar32,

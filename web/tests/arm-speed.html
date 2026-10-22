@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ARM speed</title>
+<!-- The ARM micro-benchmark (src/arm/bench.rs) in the browser: the plain build
+     (web/pkg/) taking turns, then the threaded build (web/pkg-mt/) taking turns
+     and on worker threads, `reps` times each in that order. Needs
+     scripts/build-wasm.sh and an isolated page: PIMU_COI=1 node web/tests/server.mjs,
+     then open /tests/arm-speed.html?insns=100000000&reps=3. -->
+<pre id="out">running</pre>
+<script type="module">
+  import { ThreadPool } from "../threads.mjs";
+  const params = new URLSearchParams(location.search);
+  const out = document.getElementById("out");
+  const pool = new ThreadPool();
+  const worker = new Worker("./arm-speed-worker.mjs", { type: "module" });
+  worker.onmessage = async ({ data }) => {
+    if (data.type === "spawn-threads") {
+      try {
+        await pool.start(data);
+        worker.postMessage({ type: "threads-spawned" });
+      } catch (error) {
+        worker.postMessage({ type: "threads-spawned", error: String(error) });
+      }
+      return;
+    }
+    out.textContent = JSON.stringify(data, null, 1);
+    window.armSpeed = data;
+    if (data.type === "result" && params.has("report")) {
+      fetch("/report", { method: "POST", body: JSON.stringify({ run: params.get("run"), ...data }) });
+    }
+  };
+  worker.onerror = (e) => (out.textContent = JSON.stringify({ error: e.message }));
+  worker.postMessage({ type: "start", insns: Number(params.get("insns") ?? 100_000_000), reps: Number(params.get("reps") ?? 3) });
+</script>

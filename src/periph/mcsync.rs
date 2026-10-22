@@ -39,7 +39,7 @@ pub const COVERAGE: Coverage = Coverage {
 /// storage would change what the signed-boot scenarios exercise.
 const BOOT_WORDS: [u32; 2] = [MBOX6, MBOX7];
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct McSync {
     held: u32,
     /// [`BOOT_WORDS`], in that order.

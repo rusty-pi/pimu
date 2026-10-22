@@ -111,6 +111,7 @@ use crate::machine::Machine;
 use crate::periph::gentimer::{self, GenericTimer, Reg, Which};
 use crate::periph::{armlocal, gic};
 
+pub mod bench;
 pub mod blocks;
 #[cfg(pimu_threads)]
 mod par;
@@ -198,6 +199,10 @@ pub struct Core {
     /// ([`ArmSide::start_parallel`]).
     #[cfg_attr(not(pimu_threads), allow(dead_code))]
     par_cycles: u64,
+    /// The highest counter reading any core had made by then, which the
+    /// next start reads no lower than.
+    #[cfg_attr(not(pimu_threads), allow(dead_code))]
+    par_counted: u64,
     /// The physical page [`ArmSide::lockstep`] last fetched from, and its
     /// words' host address (0 when it is not plain DRAM).
     code: (u64, usize),
@@ -264,6 +269,7 @@ impl Core {
             blocks: (crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some())
                 .then(Box::<blocks::Blocks>::default),
             par_cycles: 0,
+            par_counted: 0,
         }
     }
 
@@ -337,6 +343,10 @@ pub struct ArmSide {
     /// `PIMU_NO_BURST=1` takes a lone core through the cycle loop too
     /// ([`Self::burst`]).
     burst_on: bool,
+    /// `PIMU_QUANTUM=<cycles>`: several runnable cores take turns a quantum
+    /// at a time, each through [`Self::burst`], instead of one instruction
+    /// each per cycle. Still repeatable, but a different interleaving.
+    quantum: u64,
     /// `PIMU_NO_SHA_SKIP=1` runs SHA-256 block loops block by block too.
     sha_on: bool,
     /// `PIMU_NO_STRAIGHT=1` steps a burst one instruction at a time.
@@ -345,6 +355,9 @@ pub struct ArmSide {
     /// their straight runs (`src/arm/runs.rs`).
     decoded: crate::aarch64::predecode::Decoded,
     runs: runs::Runs,
+    /// The runs compiled to host code (`src/aarch64/jit.rs`).
+    #[cfg(feature = "jit")]
+    pub jit: Option<Box<crate::aarch64::jit::Jit>>,
     /// `PIMU_ARM_BLOCKS=1` counts straight-line runs; only [`Self::step_core`]
     /// sees them, so it takes the cores off the burst path.
     blocks_on: bool,
@@ -485,10 +498,16 @@ impl ArmSide {
             woke: 0,
             park_on: std::env::var_os("PIMU_NO_PARK").is_none(),
             burst_on: std::env::var_os("PIMU_NO_BURST").is_none(),
+            quantum: std::env::var("PIMU_QUANTUM")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             sha_on: std::env::var_os("PIMU_NO_SHA_SKIP").is_none(),
             straight_on: std::env::var_os("PIMU_NO_STRAIGHT").is_none(),
             decoded: Default::default(),
             runs: Default::default(),
+            #[cfg(feature = "jit")]
+            jit: crate::aarch64::jit::Jit::new::<ArmBus<'static>>().map(Box::new),
             blocks_on: crate::diag::ON && std::env::var_os("PIMU_ARM_BLOCKS").is_some(),
             stop_on_store: false,
             stored: false,
@@ -693,6 +712,13 @@ impl ArmSide {
         let Some(p) = core.park.take() else {
             return;
         };
+        // Under a quantum, another core's turn can reach it from a cycle
+        // before the park began, or after it ran out.
+        let t = if self.quantum != 0 {
+            t.clamp(p.start(), p.until)
+        } else {
+            t
+        };
         debug_assert!(t <= p.until, "core {id} resumed past its park");
         let n = p.resume(&mut core.cpu, m, &core.timer, t);
         core.insns += n;
@@ -812,11 +838,28 @@ impl ArmSide {
                     self.sha_skip(m, id, limit);
                 }
             }
-            // One core takes turns and no other is parked: until something is
-            // due, the cycles below would visit just it.
+            if self.quantum != 0
+                && self.burst_on
+                && self.runnable.count_ones() > 1
+                && self.prof.is_none()
+                && !self.blocks_on
+            {
+                let limit = end
+                    .min(self.timer_due)
+                    .min(self.park_due)
+                    .min(self.cycles + self.quantum);
+                if limit > self.cycles {
+                    self.quanta(m, limit);
+                    if self.stop_on_store && self.stored {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            // One core takes turns: until something is due, the cycles below
+            // would visit just it. A parked core only needs its stores.
             if self.burst_on
                 && self.runnable.is_power_of_two()
-                && self.parked == 0
                 && self.prof.is_none()
                 && !self.blocks_on
             {
@@ -831,12 +874,7 @@ impl ArmSide {
                 }
             }
             // Several cores take turns: the same, a cycle at a time.
-            if self.burst_on
-                && self.runnable != 0
-                && self.parked == 0
-                && self.prof.is_none()
-                && !self.blocks_on
-            {
+            if self.burst_on && self.runnable != 0 && self.prof.is_none() && !self.blocks_on {
                 let limit = end.min(self.timer_due).min(self.park_due);
                 if limit > self.cycles && self.lockstep_ready() {
                     self.lockstep(m, limit);
@@ -862,6 +900,35 @@ impl ArmSide {
             if self.stop_on_store && self.stored {
                 break;
             }
+        }
+    }
+
+    /// Each runnable core in turn runs from this cycle up to `limit`, as
+    /// though it were alone.
+    fn quanta(&mut self, m: &mut Machine, limit: u64) {
+        let start = self.cycles;
+        let mut ids = self.runnable;
+        while ids != 0 && self.stopped.is_none() {
+            let id = ids.trailing_zeros() as usize;
+            ids &= ids - 1;
+            self.cycles = start;
+            while self.cycles < limit && self.stopped.is_none() && self.runnable & 1 << id != 0 {
+                if self.dirty {
+                    self.sync(m);
+                }
+                if self.cores[id].detect.watching() {
+                    self.take_turns(m, 1 << id);
+                    self.cycles += 1;
+                } else {
+                    self.stopped = self.burst(m, id, limit);
+                }
+                if self.stop_on_store && self.stored {
+                    return;
+                }
+            }
+        }
+        if self.stopped.is_none() {
+            self.cycles = self.cycles.max(limit);
         }
     }
 
@@ -910,7 +977,7 @@ impl ArmSide {
         true
     }
 
-    /// The runnable cores, nothing parked or due before `limit`: one step of
+    /// The runnable cores, nothing due before `limit`: one step of
     /// each per cycle, in core order, exactly as the cycle loop would take
     /// them, but without its checks for as long as every step is one
     /// [`Self::step_core`] would call plain. The first that is not is
@@ -972,11 +1039,12 @@ impl ArmSide {
                     && !done.io
                     && same_effects
                     && (done.written.is_none()
-                        || !self
-                            .cores
-                            .iter()
-                            .enumerate()
-                            .any(|(k, c)| k != id && c.cpu.marked()));
+                        || (self.parked == 0
+                            && !self
+                                .cores
+                                .iter()
+                                .enumerate()
+                                .any(|(k, c)| k != id && c.cpu.marked())));
                 let core = &mut self.cores[id];
                 if plain {
                     if track {
@@ -1118,18 +1186,22 @@ impl ArmSide {
     /// interrupt state alone. The first that does not ends the burst and is
     /// finished the ordinary way.
     fn burst(&mut self, m: &mut Machine, id: usize, limit: u64) -> Option<ArmStop> {
-        // Another core's exclusive mark is the one thing a plain store can
-        // change; nobody else runs, so no mark can appear meanwhile.
-        let marked = self
-            .cores
-            .iter()
-            .enumerate()
-            .any(|(k, c)| k != id && c.cpu.marked());
+        // Another core's exclusive mark, or what a parked core waits on, is
+        // what a plain store can change; nobody else runs, so no mark can
+        // appear meanwhile.
+        let marked = self.parked != 0
+            || self
+                .cores
+                .iter()
+                .enumerate()
+                .any(|(k, c)| k != id && c.cpu.marked());
         let track = self.park_on || self.sha_on;
         let released_at = self.released_at.unwrap_or(0);
         let mut cycles = self.cycles;
         let decoded = &mut self.decoded;
         let runs = &mut self.runs;
+        #[cfg(feature = "jit")]
+        let mut jit = self.jit.as_deref_mut();
         let core = &mut self.cores[id];
         core.waiting = false;
         if core.wfe_until.take().is_some() {
@@ -1173,7 +1245,15 @@ impl ArmSide {
                     effects,
                     track,
                 };
-                let end = at.run(cpu, &mut bus, runs, decoded, detect);
+                let end = at.run(
+                    cpu,
+                    &mut bus,
+                    runs,
+                    decoded,
+                    detect,
+                    #[cfg(feature = "jit")]
+                    jit.as_deref_mut(),
+                );
                 *insns += at.cycles - cycles;
                 cycles = at.cycles;
                 match end {
@@ -1218,8 +1298,12 @@ impl ArmSide {
         let done = last?;
         let stop = self.after_step(m, id, done);
         self.refresh_runnable(id);
+        let woke = std::mem::take(&mut self.woke);
+        if stop.is_none() && woke != 0 {
+            self.take_turns(m, woke);
+        }
         self.cycles += 1;
-        stop
+        stop.or(self.stopped.take())
     }
 
     /// Core `id` back at the head of its SHA-256 loop: skip the passes the
@@ -1360,7 +1444,7 @@ impl ArmSide {
         // Sleepers an event just reached: their runnable bits need a look.
         let mut signalled = 0u32;
         // Most steps have nothing to tell the other cores.
-        let others = if written.is_some() || sev || broadcast {
+        let others = if written.is_some() || sev || broadcast.is_some() {
             self.cores.len()
         } else {
             0
@@ -1380,8 +1464,8 @@ impl ArmSide {
             if event && other.waiting {
                 signalled |= 1 << k;
             }
-            if broadcast {
-                other.cpu.tlb.flush();
+            if let Some(what) = broadcast {
+                other.cpu.tlb.invalidate(what);
             }
         }
         while signalled != 0 {
@@ -1890,6 +1974,7 @@ impl Straight {
         runs: &mut runs::Runs,
         decoded: &mut crate::aarch64::predecode::Decoded,
         detect: &mut park::Detector,
+        #[cfg(feature = "jit")] mut jit: Option<&mut crate::aarch64::jit::Jit>,
     ) -> StraightEnd {
         let mut c = self.cycles;
         // A linked run fits before the limit from this far before it, and the
@@ -1933,6 +2018,9 @@ impl Straight {
             let mut chained: Option<*const RunOp> = None;
             let mut unlinked: Option<*const RunOp> = None;
             'runs: loop {
+                // The whole run when it was looked up rather than chained to.
+                #[cfg(feature = "jit")]
+                let mut whole: Option<(*const RunOp, usize)> = None;
                 let first = match chained.take() {
                     Some(run) => run,
                     None => {
@@ -1953,6 +2041,10 @@ impl Straight {
                             break 'page StraightEnd::Slow;
                         };
                         let first: *const RunOp = first;
+                        #[cfg(feature = "jit")]
+                        {
+                            whole = Some((first, ops.len()));
+                        }
                         if let Some(branch) = unlinked.take() {
                             if runs.epoch == runs_epoch {
                                 // `get` has checked the run against the page.
@@ -1972,11 +2064,43 @@ impl Straight {
                 let mut pc = cpu.pc;
                 let mut from = unsafe { &*first };
                 bus.written = None;
+                // `from` is the start of a run, not an instruction partway
+                // through one.
+                #[cfg(feature = "jit")]
+                let mut entered = true;
                 let (branch, next) = loop {
                     // Where tail calls are not made, as on wasm32 without
                     // `tail-call`, each instruction run nests a call deeper.
                     bus.chain_until = chain_end.min(c + CHAIN_SPAN);
-                    (pc, c) = from.go(cpu, bus, pc, c);
+                    #[cfg(feature = "jit")]
+                    let compiled = match (jit.as_deref_mut(), entered) {
+                        (Some(jit), true) => {
+                            // The run `runs.get` returned or a branch was
+                            // linked to, which stays put while `runs.epoch`
+                            // does.
+                            let ops = whole
+                                .take()
+                                .map(|(ops, len)| unsafe { std::slice::from_raw_parts(ops, len) });
+                            let ctx = crate::aarch64::jit::Ctx {
+                                gen,
+                                marked: u64::from(self.marked),
+                                genp,
+                                chain_until: 0,
+                            };
+                            jit.go(from, ops, runs.epoch, cpu, bus, &ctx, pc, c)
+                        }
+                        _ => None,
+                    };
+                    #[cfg(feature = "jit")]
+                    {
+                        entered = false;
+                    }
+                    #[cfg(not(feature = "jit"))]
+                    let compiled = None;
+                    (pc, c) = match compiled {
+                        Some(stopped) => stopped,
+                        None => from.go(cpu, bus, pc, c),
+                    };
                     let op = unsafe { &*bus.stopped };
                     let next = bus.next;
                     if !bus.ran {
@@ -2242,6 +2366,22 @@ impl crate::aarch64::predecode::RunBus for ArmBus<'_> {
     fn chain(&self, c: u64, gen: u64) -> bool {
         // `Straight::run` keeps it at its page's.
         c < self.chain_until && unsafe { *self.genp } == gen
+    }
+
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    fn settle(&mut self, gen: u64, genp: *const u64, marked: bool) -> bool {
+        if self.io {
+            return false;
+        }
+        if self.written.is_some() {
+            // The run's page's, which the compiled code was handed.
+            if marked || unsafe { *genp } != gen {
+                return false;
+            }
+            self.written = None;
+        }
+        true
     }
 }
 

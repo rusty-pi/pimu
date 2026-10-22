@@ -304,6 +304,48 @@ pub(super) fn read<M: Memory + ?Sized>(cpu: &mut Cpu, k: u32, mem: &mut M) -> Re
     })
 }
 
+/// The registers [`read`] answers by name from the core's own state.
+const CORE_REGS: [u32; 22] = [
+    key(3, 3, 4, 2, 0),
+    key(3, 3, 4, 2, 1),
+    key(3, 3, 4, 4, 0),
+    key(3, 3, 4, 4, 1),
+    key(3, 3, 13, 0, 2),
+    key(3, 3, 13, 0, 3),
+    key(3, 3, 0, 0, 7),
+    key(3, 3, 0, 0, 1),
+    key(3, 0, 4, 2, 2),
+    key(3, 0, 4, 2, 0),
+    key(3, 0, 4, 1, 0),
+    key(3, 4, 4, 1, 0),
+    key(3, 6, 4, 1, 0),
+    key(3, 0, 0, 0, 0),
+    key(3, 0, 0, 0, 5),
+    key(3, 0, 0, 0, 6),
+    key(3, 1, 0, 0, 0),
+    key(3, 1, 0, 0, 1),
+    key(3, 1, 0, 0, 7),
+    key(3, 2, 0, 0, 0),
+    key(3, 0, 12, 1, 0),
+    key(3, 6, 12, 0, 1),
+];
+
+/// Whether [`read`] answers `MRS` of `k` from the core alone, never asking
+/// the machine: a straight run goes on through it.
+pub(super) fn core_only(k: u32) -> bool {
+    let (op0, op1, crn, crm) = (k >> 14, (k >> 11) & 7, (k >> 7) & 15, (k >> 3) & 15);
+    if min_el(op0, op1).is_none() {
+        return false;
+    }
+    if op0 == 3 && crn == 14 {
+        return k == key(3, 3, 14, 0, 0);
+    }
+    CORE_REGS.contains(&k)
+        || (op0 == 3 && op1 == 0 && crn == 0 && (1..=7).contains(&crm))
+        || banked(k).is_some()
+        || is_plain(k)
+}
+
 /// `MSR` (register).
 pub(super) fn write<M: Memory + ?Sized>(
     cpu: &mut Cpu,
@@ -318,18 +360,45 @@ pub(super) fn write<M: Memory + ?Sized>(
     if cpu.el < min {
         return Err(UNDEF);
     }
-    let before = shaping(&cpu.sys);
+    let before = (shaping(&cpu.sys), cpu.sys.ttbr0[1], cpu.sys.ttbr1_el1);
     write_reg(cpu, k, v, mem)?;
-    if shaping(&cpu.sys) != before {
+    if shaping(&cpu.sys) != before.0 {
+        cpu.tlb.reshaped += 1;
         cpu.tlb.flush();
+        cpu.tlb.retag(asid(&cpu.sys));
+    } else if (cpu.sys.ttbr0[1], cpu.sys.ttbr1_el1) != (before.1, before.2) {
+        // The entries the EL1&0 regime walked carry their ASID, as an A72's
+        // do: Linux moves TTBR0 and the ASID on every kernel entry when the
+        // core has no PAN, and would otherwise flush the TLB each time.
+        cpu.tlb.retag(asid(&cpu.sys));
     }
     Ok(())
 }
 
-/// The registers that decide what the TLB holds (`src/aarch64/mmu.rs`).
+/// The registers that decide what the TLB holds (`src/aarch64/mmu.rs`),
+/// but for the EL1&0 regime's TTBRs, which the entries' ASID covers.
 #[allow(clippy::type_complexity)]
-fn shaping(s: &SysRegs) -> ([u64; 4], [u64; 4], [u64; 4], u64, u64, u64) {
-    (s.sctlr, s.tcr, s.ttbr0, s.ttbr1_el1, s.hcr_el2, s.scr_el3)
+fn shaping(s: &SysRegs) -> ([u64; 4], [u64; 4], [u64; 2], u64, u64) {
+    (
+        s.sctlr,
+        s.tcr,
+        [s.ttbr0[2], s.ttbr0[3]],
+        s.hcr_el2,
+        s.scr_el3,
+    )
+}
+
+/// The EL1&0 regime's ASID: from `TTBR1_EL1` or `TTBR0_EL1` as `TCR_EL1.A1`
+/// says, 8 or 16 bits as `TCR_EL1.AS` does.
+fn asid(s: &SysRegs) -> u16 {
+    let tcr = s.tcr[1];
+    let ttbr = if tcr >> 22 & 1 != 0 {
+        s.ttbr1_el1
+    } else {
+        s.ttbr0[1]
+    };
+    let mask = if tcr >> 36 & 1 != 0 { 0xFFFF } else { 0xFF };
+    (ttbr >> 48) as u16 & mask
 }
 
 fn write_reg<M: Memory + ?Sized>(cpu: &mut Cpu, k: u32, v: u64, mem: &mut M) -> Result<(), Stop> {

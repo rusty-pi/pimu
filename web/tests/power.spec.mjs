@@ -507,3 +507,24 @@ function stateOf({ arm = ["off", "off", "off", "off"], vpu = ["running", "off"],
     },
   };
 }
+
+test.describe("a snapshot at the ARM's release", () => {
+  test("is asked for once, kept, and the next boot starts from it", async ({ app }) => {
+    await app.open("soc");
+    await app.drawer.locator("details summary").click();
+    await app.drawer.getByRole("checkbox", { name: /Skip the firmware's boot with a snapshot/ }).check();
+    await app.powerOn();
+    const first = await app.request();
+    expect(first.options.snapshot).toBe(true);
+    expect(first.snapshot).toBeUndefined();
+    await app.page.evaluate((key) => window.__machine().emit({ type: "snapshot", key, bytes: new Uint8Array([1, 2, 3]) }), first.snapshotKey);
+    await expect(app.page.locator("#toast")).toHaveText(/^Snapshot kept/);
+    await app.powerButton.click();
+    await app.powerOn();
+    const workers = await app.workers();
+    const second = workers.at(-1).sent.find((m) => m.type === "power-on");
+    expect(second.snapshotKey).toBe(first.snapshotKey);
+    expect(second.snapshot).toBeDefined();
+    expect(second.options.snapshot).toBeUndefined();
+  });
+});

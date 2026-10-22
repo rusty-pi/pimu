@@ -71,6 +71,13 @@ pub trait Memory {
     /// A store went straight to host memory at physical `pa`.
     fn wrote(&mut self, _pa: u64, _size: u32) {}
 
+    /// Move on the write generation at `gen`, from [`Self::host_page`], for
+    /// a store straight to its page.
+    #[inline(always)]
+    fn bump(&mut self, gen: usize) {
+        unsafe { *(gen as *mut u64) += 1 };
+    }
+
     /// Whether the write after [`Self::expect_unchanged`] found the location
     /// changed and so did not store.
     fn exclusive_lost(&mut self) -> bool {
@@ -80,7 +87,7 @@ pub trait Memory {
 
 /// A synchronous exception, raised by the instruction at [`Cpu::pc`] (which is
 /// left pointing at it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Exception {
     Undefined,
     Svc(u16),

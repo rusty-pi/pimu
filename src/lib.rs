@@ -13,6 +13,9 @@
 //!                └── the other end of the Ethernet cable   net/
 //! ```
 
+#![cfg_attr(pimu_tail, feature(explicit_tail_calls))]
+#![cfg_attr(pimu_tail, allow(incomplete_features))]
+
 pub mod aarch64;
 pub mod align;
 pub mod arm;
@@ -39,6 +42,7 @@ pub mod periph;
 pub mod remote;
 pub mod sched;
 pub mod sheet;
+pub mod snap;
 pub mod soc;
 pub mod spec;
 pub mod stdio;

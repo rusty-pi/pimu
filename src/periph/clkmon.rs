@@ -70,7 +70,7 @@ pub const COVERAGE: Coverage = Coverage {
 
 const PASSWD: u32 = 0x5A00_0000;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ClkMon {
     storage: BTreeMap<u32, u32>,
 }

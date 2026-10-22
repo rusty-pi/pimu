@@ -405,6 +405,7 @@ const PI400_LINES: &[(usize, &str)] = &[(42, "PWR_LED_CLK")];
 const PUP_PDN_RESET: [u32; PUP_PDN_COUNT as usize] =
     [0xAAA9_5555, 0xA0AA_AAAA, 0x50AA_A95A, 0x0005_5555];
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Gpio {
     fsel: [u32; GPFSEL_COUNT as usize],
     /// The output latch, whatever the pin's function is.
@@ -417,7 +418,7 @@ pub struct Gpio {
     pup_pdn: [u32; PUP_PDN_COUNT as usize],
     pin_mux: u32,
     pad_cfg: u32,
-    lines: [&'static str; PINS],
+    lines: crate::snap::Keep<[&'static str; PINS]>,
     pub log: Log,
 }
 
@@ -433,7 +434,7 @@ impl Default for Gpio {
             pup_pdn: PUP_PDN_RESET,
             pin_mux: 0,
             pad_cfg: 0,
-            lines: PI4B_LINES,
+            lines: crate::snap::Keep(PI4B_LINES),
             log: Log::default(),
         }
     }
@@ -445,7 +446,7 @@ impl Gpio {
     }
 
     pub fn fit_board(&mut self, board: Board) {
-        self.lines = PI4B_LINES;
+        self.lines = crate::snap::Keep(PI4B_LINES);
         let changes: &[(usize, &'static str)] = match board.board_type() {
             TYPE_CM4 => CM4_LINES,
             TYPE_PI400 => PI400_LINES,

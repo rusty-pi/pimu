@@ -70,7 +70,7 @@ const MR8_8GB_X16: u8 = 0b0010 << 2;
 /// so this is what decides how much memory the board appears to have: 16 Gb
 /// single-rank is a 2 GB Pi 4, 32 Gb single-rank a 4 GB one and 32 Gb
 /// dual-rank an 8 GB one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Dram {
     pub die_gbit: u32,
     pub dual_rank: bool,
@@ -120,6 +120,7 @@ impl Default for Dram {
 
 type MrKey = (bool, bool, u8);
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Sdc {
     storage: BTreeMap<u32, u32>,
     /// The fitted ranks' mode registers, as the firmware's reads and writes

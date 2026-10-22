@@ -23,7 +23,7 @@ pub const TYPE_PI4B: u32 = 0x11;
 pub const TYPE_PI400: u32 = 0x13;
 pub const TYPE_CM4: u32 = 0x14;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Board {
     pub stepping: Stepping,
     pub revision: u32,

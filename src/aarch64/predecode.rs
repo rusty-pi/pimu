@@ -48,12 +48,20 @@ pub(super) enum Kind {
     StoreUimm,
     LdStRegOff,
     LdStImm,
+    /// `LDP`/`STP` (and the non-temporal forms) of S, D or Q registers.
+    PairV,
     Pair,
     // The PC, or an exception at it.
     DpImm,
     DpReg,
     Adr,
     Adrp,
+    /// SIMD and floating point data processing: the vector and FP registers,
+    /// `FPSR` and `NZCV` only, through `exec::execute`. A run goes on
+    /// through it, where `Execute` would end there.
+    SimdDp,
+    /// `MRS` of a register the core holds itself (`sysreg::core_only`).
+    Mrs,
     // Registers and flags only (`Op::pure`).
     Nop,
     CmpImm,
@@ -82,13 +90,13 @@ pub(super) enum Kind {
 /// [`Kind`]; [`decode`] and [`Cpu::run_op`] are the two sides of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Op {
-    insn: u32,
-    kind: Kind,
-    a: u8,
-    b: u8,
-    c: u8,
-    imm: u64,
-    imm2: u64,
+    pub(super) insn: u32,
+    pub(super) kind: Kind,
+    pub(super) a: u8,
+    pub(super) b: u8,
+    pub(super) c: u8,
+    pub(super) imm: u64,
+    pub(super) imm2: u64,
 }
 
 impl Op {
@@ -123,6 +131,13 @@ impl Op {
     #[inline(always)]
     pub fn plain_branch(&self) -> bool {
         (Kind::B as u8..=Kind::Tbz as u8).contains(&(self.kind as u8))
+    }
+
+    /// Whether the instruction is a `BR`, `BLR` or `RET`, which a run may go
+    /// on from through [`RunBus::indirect`].
+    #[inline(always)]
+    pub fn indirect_branch(&self) -> bool {
+        self.kind == Kind::BranchReg && self.insn & 0xFF9F_FC1F == 0xD61F_0000
     }
 
     /// Whether the instruction reads and writes nothing but general
@@ -219,6 +234,7 @@ pub(super) fn decode(insn: u32) -> Op {
         0b1010 | 0b1011 => branch(insn).unwrap_or_else(|| generic(Kind::Execute)),
         0b0100 | 0b0110 | 0b1100 | 0b1110 => ldst(insn).unwrap_or_else(|| generic(Kind::Execute)),
         0b0101 | 0b1101 => dp_reg(insn).unwrap_or_else(|| generic(Kind::DpReg)),
+        0b0111 | 0b1111 => generic(Kind::SimdDp),
         _ => generic(Kind::Execute),
     }
 }
@@ -333,6 +349,15 @@ fn branch(insn: u32) -> Option<Op> {
     } else if insn & 0xFFFF_F0DF == 0xD503_309F {
         // DSB, DMB.
         Some(op(insn, Kind::Barrier, 0, 0, 0, 0))
+    } else if insn & 0xFFF0_0000 == 0xD530_0000 && super::sysreg::core_only(field(insn, 5, 16)) {
+        Some(op(
+            insn,
+            Kind::Mrs,
+            field(insn, 0, 5),
+            0,
+            0,
+            field(insn, 5, 16) as u64,
+        ))
     } else if insn & 0xFE00_0000 == 0xD600_0000 {
         Some(op(insn, Kind::BranchReg, 0, 0, 0, 0))
     } else {
@@ -351,8 +376,12 @@ fn ldst(insn: u32) -> Option<Op> {
         if bit(insn, 26) {
             return None;
         }
-        let (scale, access) =
-            single_access(field(insn, 30, 2), false, field(insn, 22, 2)).ok()??;
+        let Some((scale, access)) =
+            single_access(field(insn, 30, 2), false, field(insn, 22, 2)).ok()?
+        else {
+            // PRFM: the model has no caches to fill.
+            return Some(op(insn, Kind::Nop, 0, 0, 0, 0));
+        };
         let rt = field(insn, 0, 5);
         let rn = field(insn, 5, 5);
         let imm = (field(insn, 10, 12) as u64) << scale;
@@ -388,9 +417,30 @@ fn ldst(insn: u32) -> Option<Op> {
     }
 }
 
+fn pair_v(insn: u32) -> Option<Op> {
+    let opc = field(insn, 30, 2);
+    if opc == 3 {
+        return None;
+    }
+    let scale = 2 + opc;
+    let mode = field(insn, 23, 2);
+    let store = !bit(insn, 22);
+    let off = sext(field(insn, 15, 7) as u64, 7) << scale;
+    let flags = scale | (store as u32) << 3 | mode << 4;
+    Some(op2(
+        insn,
+        Kind::PairV,
+        field(insn, 0, 5),
+        field(insn, 5, 5),
+        field(insn, 10, 5),
+        off,
+        flags as u64,
+    ))
+}
+
 fn pair(insn: u32) -> Option<Op> {
     if bit(insn, 26) {
-        return None;
+        return pair_v(insn);
     }
     let opc = field(insn, 30, 2);
     let mode = field(insn, 23, 2);
@@ -638,17 +688,17 @@ impl Op {
         }
         go!(
             Execute, BranchReg, B, Bl, BCond, Cbz, Tbz, LdrX, LdrW, LdrH, LdrB, StrX, StrW, StrH,
-            StrB, Barrier, LdStReg, LdStPair, LoadUimm, StoreUimm, LdStRegOff, LdStImm, Pair,
-            DpImm, DpReg, Adr, Adrp, Nop, CmpImm, CmpImmW, CmpReg, CmpRegW, AddImmR, SubImmR,
-            MovReg, AddImm, SubImm, AddsImm, SubsImm, MovConst, MovK, LogicImm, LogicReg,
-            AddSubReg, Bitfield, Ccmp, Csel, Madd
+            StrB, Barrier, LdStReg, LdStPair, LoadUimm, StoreUimm, LdStRegOff, LdStImm, PairV,
+            Pair, DpImm, DpReg, Adr, Adrp, SimdDp, Mrs, Nop, CmpImm, CmpImmW, CmpReg, CmpRegW,
+            AddImmR, SubImmR, MovReg, AddImm, SubImm, AddsImm, SubsImm, MovConst, MovK, LogicImm,
+            LogicReg, AddSubReg, Bitfield, Ccmp, Csel, Madd
         )
     }
 }
 
 /// The handler for instructions of `kind` on bus `M`.
 #[inline(always)]
-fn handler_of<M: Memory + ?Sized>(kind: Kind) -> Handler<M> {
+pub(super) fn handler_of<M: Memory + ?Sized>(kind: Kind) -> Handler<M> {
     match kind {
         Kind::Execute => h_execute::<M>,
         Kind::BranchReg => h_branch_reg::<M>,
@@ -680,11 +730,14 @@ fn handler_of<M: Memory + ?Sized>(kind: Kind) -> Handler<M> {
         Kind::StoreUimm => h_store_uimm::<M>,
         Kind::LdStRegOff => h_ld_st_reg_off::<M>,
         Kind::LdStImm => h_ld_st_imm::<M>,
+        Kind::PairV => h_pair_v::<M>,
         Kind::Pair => h_pair::<M>,
         Kind::DpImm => h_dp_imm::<M>,
         Kind::DpReg => h_dp_reg::<M>,
         Kind::Adr => h_adr::<M>,
         Kind::Adrp => h_adrp::<M>,
+        Kind::SimdDp => h_simd::<M>,
+        Kind::Mrs => h_mrs::<M>,
         Kind::AddImm => h_add_imm::<M>,
         Kind::SubImm => h_sub_imm::<M>,
         Kind::AddsImm => h_adds_imm::<M>,
@@ -711,10 +764,19 @@ pub struct RunOp {
     go: usize,
     link: Cell<usize>,
     link_gen: Cell<u64>,
+    /// The run from here compiled (`src/aarch64/jit.rs`), and how often it
+    /// was entered before it was.
+    #[cfg(feature = "jit")]
+    pub(super) jit: Cell<usize>,
+    #[cfg(feature = "jit")]
+    pub(super) hits: Cell<u32>,
 }
 
 /// What a straight run needs of the bus it runs on.
 pub trait RunBus: Memory {
+    /// Whether [`Self::indirect`] may answer, and its run loop take a
+    /// register branch that ran as the end of the run's chain.
+    const INDIRECT: bool = false;
     /// The load or store at hand happens at cycle `c`.
     fn at(&mut self, c: u64);
     /// Whether the loads and stores so far left nothing for the run loop to
@@ -727,9 +789,41 @@ pub trait RunBus: Memory {
     /// Whether a branch `c` cycles in may go on into the run it is linked
     /// to, which was decoded at its page's generation `gen`.
     fn chain(&self, c: u64, gen: u64) -> bool;
+    /// After a load or store a compiled run made: whether the run may go on
+    /// past it, as `Straight::run` would, forgetting the store if so. `gen`
+    /// is the run's page's write generation when it began, `genp` where that
+    /// page's generation is, and `marked` that another core holds an
+    /// exclusive mark.
+    #[cfg(feature = "jit")]
+    fn settle(&mut self, gen: u64, genp: *const u64, marked: bool) -> bool;
+    /// The run at `next`, where a `BR`, `BLR` or `RET` `c` cycles in went,
+    /// if the bus knows it and lets the branch go on into it.
+    fn indirect(&mut self, _cpu: &Cpu, _next: u64, _c: u64) -> Option<*const RunOp> {
+        None
+    }
 }
 
 type Go<M> = fn(&mut Cpu, &RunOp, &mut M, u64, u64) -> (u64, u64);
+
+/// Go on into `run`'s instruction at `pc`, `c` cycles in: as a tail call
+/// where the compiler is told to make one (`pimu_tail`), since a wasm engine
+/// turns a plain call there into a frame per instruction of the chain.
+#[cfg(pimu_tail)]
+macro_rules! go_on {
+    ($run:expr, $cpu:expr, $bus:expr, $pc:expr, $c:expr) => {{
+        let run: &RunOp = $run;
+        // A `Go` of the bus's, which `RunOp::new` made.
+        let go: Go<_> = unsafe { std::mem::transmute(run.go) };
+        become go($cpu, run, $bus, $pc, $c)
+    }};
+}
+
+#[cfg(not(pimu_tail))]
+macro_rules! go_on {
+    ($run:expr, $cpu:expr, $bus:expr, $pc:expr, $c:expr) => {
+        return $run.go($cpu, $bus, $pc, $c)
+    };
+}
 
 impl RunOp {
     /// `op` in a run on bus `M`; `last` when it is the run's last.
@@ -744,6 +838,10 @@ impl RunOp {
             go: go as usize,
             link: Cell::new(0),
             link_gen: Cell::new(0),
+            #[cfg(feature = "jit")]
+            jit: Cell::new(0),
+            #[cfg(feature = "jit")]
+            hits: Cell::new(0),
         }
     }
 
@@ -785,6 +883,7 @@ impl Op {
             Kind::BCond => go_branch::<M, { Kind::BCond as u8 }>,
             Kind::Cbz => go_branch::<M, { Kind::Cbz as u8 }>,
             Kind::Tbz => go_branch::<M, { Kind::Tbz as u8 }>,
+            Kind::BranchReg if M::INDIRECT && self.indirect_branch() => go_indirect::<M>,
             _ => go_stop::<M>,
         }
     }
@@ -808,7 +907,11 @@ fn go_kind<M: RunBus, const K: u8>(
         true
     } else if (Kind::BCond as u8..=Kind::Tbz as u8).contains(&K) {
         if next != pc.wrapping_add(4) {
-            return taken(cpu, o, bus, pc, next, c);
+            if let Some(run) = linked(o, bus, c) {
+                go_on!(run, cpu, bus, next, c + 1);
+            }
+            bus.stop(o, next, true);
+            return (pc, c);
         }
         true
     } else if K <= Kind::Bl as u8 {
@@ -821,7 +924,7 @@ fn go_kind<M: RunBus, const K: u8>(
     if on {
         // Not the last of its run, which `go_last` runs.
         let n = unsafe { &*(o as *const RunOp).add(1) };
-        return n.go(cpu, bus, next, c + 1);
+        go_on!(n, cpu, bus, next, c + 1);
     }
     bus.stop(o, next, true);
     (pc, c)
@@ -841,25 +944,31 @@ fn go_branch<M: RunBus, const K: u8>(
         bus.stop(o, next, true);
         return (pc, c);
     }
-    taken(cpu, o, bus, pc, next, c)
+    if let Some(run) = linked(o, bus, c) {
+        go_on!(run, cpu, bus, next, c + 1);
+    }
+    bus.stop(o, next, true);
+    (pc, c)
 }
 
-/// The branch `o` at `pc` taken to `next`: on into the run it is linked to
-/// where `bus` lets it.
+/// The run the branch `o`, taken `c` cycles in, is linked to, where `bus`
+/// lets it go on into it.
 #[inline(always)]
-fn taken<M: RunBus>(
-    cpu: &mut Cpu,
-    o: &RunOp,
-    bus: &mut M,
-    pc: u64,
-    next: u64,
-    c: u64,
-) -> (u64, u64) {
+fn linked<'a, M: RunBus>(o: &RunOp, bus: &M, c: u64) -> Option<&'a RunOp> {
     let link = o.link.get();
-    if link != 0 && bus.chain(c, o.link_gen.get()) {
-        // A run on this page from its current generation, which stays put.
-        let run = unsafe { &*(link as *const RunOp) };
-        return run.go(cpu, bus, next, c + 1);
+    // A run on this page from its current generation, which stays put.
+    (link != 0 && bus.chain(c, o.link_gen.get())).then(|| unsafe { &*(link as *const RunOp) })
+}
+
+/// `BR`, `BLR` or `RET`: on into the run at its target where `bus` knows it.
+fn go_indirect<M: RunBus>(cpu: &mut Cpu, o: &RunOp, bus: &mut M, pc: u64, c: u64) -> (u64, u64) {
+    let next = h_branch_reg::<M>(cpu, &o.op, bus, pc);
+    if !cpu.faulted() {
+        if let Some(run) = bus.indirect(cpu, next, c) {
+            // A run of the bus's, which stays put while the bus vouches for it.
+            let run = unsafe { &*run };
+            go_on!(run, cpu, bus, next, c + 1);
+        }
     }
     bus.stop(o, next, true);
     (pc, c)
@@ -891,6 +1000,23 @@ fn h_execute<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) ->
     cpu.next_pc = pc.wrapping_add(4);
     let r = exec::execute(cpu, o.insn, mem);
     settled(cpu, r)
+}
+
+fn h_simd<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
+    cpu.pc = pc;
+    cpu.next_pc = pc.wrapping_add(4);
+    let r = super::simd::execute(cpu, o.insn);
+    settled(cpu, r)
+}
+
+fn h_mrs<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    match super::sysreg::read(cpu, o.imm as u32, mem) {
+        Ok(v) => {
+            cpu.set_xr(o.a as u32, true, v);
+            pc.wrapping_add(4)
+        }
+        Err(s) => faulted(cpu, s, pc),
+    }
 }
 
 fn h_branch_reg<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, _: &mut M, pc: u64) -> u64 {
@@ -1157,6 +1283,37 @@ fn h_pair<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u6
     }
     cpu.set_xr(a, sf, first);
     cpu.set_xr(c, sf, second);
+    pc.wrapping_add(4)
+}
+
+/// `LDP`/`STP` of SIMD and FP registers: both halves straight through the
+/// data TLB, or the whole instruction through `exec`.
+fn h_pair_v<M: Memory + ?Sized>(cpu: &mut Cpu, o: &Op, mem: &mut M, pc: u64) -> u64 {
+    let (a, b, c) = (o.a as usize, o.b as u32, o.c as usize);
+    let f = o.imm2 as u32;
+    let bytes = 1usize << (f & 7);
+    let store = f & 8 != 0;
+    let (addr, wb) = indexed(cpu.xsp(b), o.imm, (f >> 4) & 3);
+    let Some(p) = cpu.host_span(mem, addr, 2 * bytes as u32, store) else {
+        return h_execute(cpu, o, mem, pc);
+    };
+    // Inside the page, which `host_span` vouched for; the vector registers
+    // are little-endian as the guest's memory is.
+    unsafe {
+        if store {
+            std::ptr::copy_nonoverlapping(cpu.v[a].to_le_bytes().as_ptr(), p, bytes);
+            std::ptr::copy_nonoverlapping(cpu.v[c].to_le_bytes().as_ptr(), p.add(bytes), bytes);
+        } else {
+            let (mut x, mut y) = ([0u8; 16], [0u8; 16]);
+            std::ptr::copy_nonoverlapping(p, x.as_mut_ptr(), bytes);
+            std::ptr::copy_nonoverlapping(p.add(bytes), y.as_mut_ptr(), bytes);
+            cpu.v[a] = u128::from_le_bytes(x);
+            cpu.v[c] = u128::from_le_bytes(y);
+        }
+    }
+    if let Some(wb) = wb {
+        cpu.set_xsp(b, true, wb);
+    }
     pc.wrapping_add(4)
 }
 

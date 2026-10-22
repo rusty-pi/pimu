@@ -24,7 +24,7 @@ pub const COVERAGE: Coverage = Coverage {
     decoded: &[CONTROL, REG_008, TIMER_PREDIV],
 };
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ArmCtrl {
     regs: BTreeMap<u32, u32>,
     release: bool,
@@ -34,6 +34,11 @@ pub struct ArmCtrl {
 impl ArmCtrl {
     pub fn new() -> ArmCtrl {
         ArmCtrl::default()
+    }
+
+    /// Whether a release is waiting for [`Self::take_release`].
+    pub fn release_pending(&self) -> bool {
+        self.release
     }
 
     pub fn take_release(&mut self) -> bool {

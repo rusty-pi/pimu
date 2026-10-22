@@ -37,7 +37,7 @@ const CS_A_WRITABLE: u32 = 0x0138_03FF;
 
 const CS_A_W1C: u32 = 0x0001_8000;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Pcm {
     storage: BTreeMap<u32, u32>,
     cs: u32,

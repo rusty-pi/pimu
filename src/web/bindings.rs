@@ -61,6 +61,7 @@ impl BootImage {
 pub struct PiBuilder {
     options: Options,
     inputs: Inputs,
+    snapshot: Option<Vec<u8>>,
 }
 
 #[wasm_bindgen]
@@ -75,6 +76,7 @@ impl PiBuilder {
                 eeprom,
                 ..Inputs::default()
             },
+            snapshot: None,
         })
     }
 
@@ -125,8 +127,17 @@ impl PiBuilder {
         Ok(())
     }
 
+    /// Start from a snapshot the page kept from a boot with the same
+    /// settings (`Pi::take_snapshot`), skipping the firmware's boot.
+    pub fn set_snapshot(&mut self, bytes: Vec<u8>) {
+        self.snapshot = Some(bytes);
+    }
+
     pub fn build(self) -> Result<Pi, JsError> {
-        let session = Session::new(self.options, self.inputs).map_err(js_error)?;
+        let mut session = Session::new(self.options, self.inputs).map_err(js_error)?;
+        if let Some(bytes) = self.snapshot {
+            session.load_snapshot(bytes).map_err(js_error)?;
+        }
         Ok(Pi { session })
     }
 }
@@ -169,6 +180,12 @@ impl Pi {
     /// came out meanwhile.
     pub fn run(&mut self, millis: u32) -> Vec<u8> {
         self.session.run(millis)
+    }
+
+    /// The snapshot taken when the ARM was released, if the options asked
+    /// for one: once, as it is taken.
+    pub fn take_snapshot(&mut self) -> Option<Vec<u8>> {
+        self.session.take_snapshot()
     }
 
     /// Bytes typed at the serial console.
@@ -251,4 +268,15 @@ pub fn parallel_probe() -> bool {
     return crate::arm::parallel_probe();
     #[cfg(not(pimu_threads))]
     false
+}
+
+/// The ARM micro-benchmark (`src/arm/bench.rs`): each core runs about
+/// `per_core` instructions, on threads when `parallel` and this build has
+/// them. `[threaded (0 or 1), instructions, seconds]`, or empty if the cores
+/// did not finish.
+#[wasm_bindgen]
+pub fn arm_speed(parallel: bool, per_core: f64) -> Vec<f64> {
+    crate::arm::bench::speed(parallel, per_core as u64).map_or(Vec::new(), |s| {
+        vec![f64::from(u8::from(s.threaded)), s.insns as f64, s.secs]
+    })
 }

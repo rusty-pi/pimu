@@ -102,8 +102,9 @@ pub const DEFAULT_EDID: [u8; 128] = [
 
 pub const EDID_ADDR: u32 = 0x50;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct HdmiDdc {
-    name: &'static str,
+    name: crate::snap::Keep<&'static str>,
     chip_address: u32,
     cnt: u32,
     ctl: u32,
@@ -111,7 +112,9 @@ pub struct HdmiDdc {
     scl_param: u32,
     /// `IIC_ENABLE` as written, status bits masked out — they are computed.
     iic_enable: u32,
+    #[serde(with = "crate::snap::array")]
     data_in: [u32; DATA_REGS],
+    #[serde(with = "crate::snap::array")]
     data_out: [u32; DATA_REGS],
     /// A transfer still on the wire: `(simulated µs at which it finishes,
     /// whether the slave acknowledged)`.
@@ -123,6 +126,7 @@ pub struct HdmiDdc {
     /// offset its address pointer currently sits at.
     edid: Option<Vec<u8>>,
     edid_ptr: usize,
+    #[serde(with = "crate::snap::array")]
     auto: [u32; AUTO_WORDS],
     /// Channels whose list has run and whose transfer is still on the wire.
     auto_busy: u32,
@@ -132,7 +136,7 @@ pub struct HdmiDdc {
 impl HdmiDdc {
     pub fn new(name: &'static str) -> HdmiDdc {
         HdmiDdc {
-            name,
+            name: crate::snap::Keep(name),
             chip_address: 0,
             cnt: 0,
             ctl: 0,
@@ -310,7 +314,7 @@ impl HdmiDdc {
 
 impl MmioDevice for HdmiDdc {
     fn name(&self) -> &'static str {
-        self.name
+        &self.name
     }
 
     fn read(&mut self, offset: u32, _width: Width) -> BusResult<u32> {

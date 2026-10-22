@@ -17,6 +17,8 @@ mod cpu;
 mod exec;
 pub mod fp;
 mod fpinsn;
+#[cfg(feature = "jit")]
+pub mod jit;
 pub mod mmu;
 pub mod predecode;
 mod simd;

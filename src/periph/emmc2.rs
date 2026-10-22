@@ -227,6 +227,7 @@ fn dma_ram_addr(addr: u32, ram_len: u64) -> u32 {
 }
 
 /// An SDMA or ADMA2 transfer in flight.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Dma {
     adma: bool,
     write: bool,
@@ -246,12 +247,14 @@ const BLOCK_POLLS: u8 = 2;
 /// 4-bit bus is 1042 clocks, 21 µs at the 50 MHz both stock stages use.
 const BLOCK_WIRE_US: u64 = 21;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct NextBlock {
     polls_left: u8,
     due_us: u64,
 }
 
 /// A PIO write in flight: blocks the host pushes through the Buffer Data Port.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct PioWrite {
     lba: u32,
     blocks_left: Option<u32>,
@@ -278,11 +281,12 @@ const DEFAULT_SPEED_HZ: u64 = 25_000_000;
 /// (`CAPABILITIES_0` reports it as 200 MHz).
 const BASE_CLOCK_HZ: u64 = 200_000_000;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Emmc2 {
-    id: Identity,
+    id: crate::snap::Keep<Identity>,
     reg: BTreeMap<u32, u32>,
     /// The inserted card. `None` is an empty slot: nothing drives CMD.
-    card: Option<SdCard>,
+    card: crate::snap::Keep<Option<SdCard>>,
     resp: [u32; 4],
     /// PIO read buffer, drained 32 bits at a time, LSB-first.
     data: Vec<u8>,
@@ -317,9 +321,9 @@ pub struct Emmc2 {
 impl Default for Emmc2 {
     fn default() -> Self {
         Emmc2 {
-            id: EMMC2_ID,
+            id: crate::snap::Keep(EMMC2_ID),
             reg: BTreeMap::new(),
-            card: None,
+            card: crate::snap::Keep(None),
             resp: [0; 4],
             data: Vec::new(),
             data_pos: 0,
@@ -352,21 +356,26 @@ impl Emmc2 {
     /// mux routes the card to it.
     pub fn new_legacy() -> Emmc2 {
         Emmc2 {
-            id: LEGACY_ID,
+            id: crate::snap::Keep(LEGACY_ID),
             ..Emmc2::default()
         }
     }
 
     pub fn insert_card(&mut self, image: Vec<u8>) {
-        self.card = Some(SdCard::new(image));
+        self.card = crate::snap::Keep(Some(SdCard::new(image)));
     }
 
     pub fn insert_disk(&mut self, disk: crate::periph::disk::Disk) {
-        self.card = Some(SdCard::with_disk(disk));
+        self.card = crate::snap::Keep(Some(SdCard::with_disk(disk)));
     }
 
     pub fn insert_mmc_disk(&mut self, disk: crate::periph::disk::Disk) {
-        self.card = Some(SdCard::mmc_with_disk(disk));
+        self.card = crate::snap::Keep(Some(SdCard::mmc_with_disk(disk)));
+    }
+
+    /// The slot itself, for a snapshot ([`crate::snap`]).
+    pub fn card_slot(&mut self) -> &mut Option<SdCard> {
+        &mut self.card
     }
 
     pub fn take_card(&mut self) -> Option<SdCard> {
@@ -374,7 +383,7 @@ impl Emmc2 {
     }
 
     pub fn put_card(&mut self, card: Option<SdCard>) {
-        self.card = card;
+        self.card = crate::snap::Keep(card);
     }
 
     /// Give the card VDD or take it away. Taking it away resets the card, so
@@ -476,6 +485,24 @@ impl Emmc2 {
 
     pub fn dma_pending(&self) -> bool {
         self.dma_pending
+    }
+
+    /// The interrupt and transfer state, for a run report.
+    pub fn describe(&self) -> String {
+        format!(
+            "INT_STATUS {:#010x} (as read {:#010x})  STATUS_EN {:#010x}  SIGNAL_EN {:#010x}  irq {}  transfer {}  dma {}  next block {}  at {} us",
+            self.get(INT_STATUS),
+            self.int_status(),
+            self.get(INT_STATUS_EN),
+            self.get(INT_SIGNAL_EN),
+            if self.irq_asserted() { "high" } else { "low" },
+            if self.transfer_active() { "under way" } else { "none" },
+            if self.dma.is_some() || self.dma_pending { "pending" } else { "idle" },
+            self.next_block
+                .as_ref()
+                .map_or("none".to_string(), |n| format!("due {} us", n.due_us)),
+            self.now_us
+        )
     }
 
     pub fn take_dma_written(&mut self) -> Vec<(u32, u32)> {
