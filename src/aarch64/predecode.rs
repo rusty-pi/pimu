@@ -802,6 +802,19 @@ pub trait RunBus: Memory {
     const COMPILED: bool = false;
     /// Run `run`'s compiled code at `pc`, `c` cycles in: what [`RunOp::go`]
     /// would return.
+    /// The table index of the compiled run at `target`, `c` cycles in, for
+    /// a compiled run that branched there to go on into, with `ctx` made
+    /// that run's; 0 to stop instead.
+    #[cfg(pimu_compiled)]
+    fn chain_compiled(
+        &mut self,
+        _cpu: &Cpu,
+        _ctx: &mut super::compiled::Ctx,
+        _target: u64,
+        _c: u64,
+    ) -> usize {
+        0
+    }
     #[cfg(pimu_compiled)]
     fn compiled(&mut self, cpu: &mut Cpu, run: &RunOp, pc: u64, c: u64) -> (u64, u64)
     where

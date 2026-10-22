@@ -216,6 +216,7 @@ struct Helpers {
     step: fn(Kind) -> super::compiled::Step,
     take: i32,
     last: i32,
+    chain: i32,
 }
 
 impl Helpers {
@@ -224,8 +225,22 @@ impl Helpers {
             step: step_of::<M>,
             take: take::<M> as *const () as usize as i32,
             last: last::<M> as *const () as usize as i32,
+            chain: chain::<M> as *const () as usize as i32,
         }
     }
+}
+
+/// The compiled run at `target`, `c` cycles in, for a run that branched
+/// there to go on into: its table index, or 0 to stop instead. The bus
+/// keeps `ctx` up to date for it.
+unsafe extern "C" fn chain<M: RunBus>(
+    cpu: *mut Cpu,
+    bus: *mut M,
+    ctx: *mut Ctx,
+    target: u64,
+    c: u64,
+) -> u32 {
+    (*bus).chain_compiled(&*cpu, &mut *ctx, target, c) as u32
 }
 
 // ---- the module ---------------------------------------------------------------
@@ -237,6 +252,7 @@ const I64: u8 = 0x7E;
 const T_RUN: u8 = 0;
 const T_STEP: u8 = 1;
 const T_TAKE: u8 = 2;
+const T_CHAIN: u8 = 3;
 
 fn leb_u(out: &mut Vec<u8>, mut v: u64) {
     loop {
@@ -278,10 +294,11 @@ fn section(out: &mut Vec<u8>, id: u8, body: &[u8]) {
 fn module(base: u32, bodies: &[Vec<u8>]) -> Vec<u8> {
     let mut m = b"\0asm\x01\0\0\0".to_vec();
     let mut types = Vec::new();
-    leb_u(&mut types, 3);
+    leb_u(&mut types, 4);
     types.extend_from_slice(&[0x60, 6, I32, I32, I32, I64, I64, I32, 0]);
     types.extend_from_slice(&[0x60, 7, I32, I32, I32, I32, I64, I64, I32, 1, I32]);
     types.extend_from_slice(&[0x60, 7, I32, I32, I32, I64, I64, I64, I32, 0]);
+    types.extend_from_slice(&[0x60, 5, I32, I32, I32, I64, I64, 1, I32]);
     section(&mut m, 1, &types);
 
     let mut imports = Vec::new();
@@ -467,18 +484,7 @@ impl Lower<'_> {
                     let on = self.set();
                     self.select(t, away, on)
                 };
-                self.store_dirty();
-                for p in [CPU, BUS] {
-                    self.get_param(p);
-                }
-                self.i32(at);
-                self.pc(i);
-                self.get(next);
-                self.cycle(i);
-                self.get_param(OUT);
-                self.i32(self.h.take);
-                self.code
-                    .extend_from_slice(&[op::RETURN_CALL_INDIRECT, T_TAKE, 0]);
+                self.exit(at, i, next);
                 STATS_INLINE.fetch_add(1, Relaxed);
                 return;
             }
@@ -499,22 +505,14 @@ impl Lower<'_> {
             if op.cond_branch() {
                 let t = self.branch_taken(op);
                 self.get(t);
-                self.code
-                    .extend_from_slice(&[op::I32_WRAP_I64, op::IF, 0x40]);
-                self.store_dirty();
-                for p in [CPU, BUS] {
-                    self.get_param(p);
-                }
-                self.i32(at);
-                self.pc(i);
                 self.pc(i);
                 self.i64(op.imm as i64);
                 self.code.push(op::I64_ADD);
-                self.cycle(i);
-                self.get_param(OUT);
-                self.i32(self.h.take);
+                let target = self.set();
+                self.get(t);
                 self.code
-                    .extend_from_slice(&[op::RETURN_CALL_INDIRECT, T_TAKE, 0]);
+                    .extend_from_slice(&[op::I32_WRAP_I64, op::IF, 0x40]);
+                self.exit(at, i, target);
                 self.code.push(op::END);
                 STATS_INLINE.fetch_add(1, Relaxed);
                 continue;
@@ -539,6 +537,50 @@ impl Lower<'_> {
                 .extend_from_slice(&[op::IF, 0x40, op::RETURN, op::END]);
             STATS_CALLED.fetch_add(1, Relaxed);
         }
+    }
+
+    /// Leave the run after the branch `at`, its instruction `i`, which goes
+    /// to `target`: on into the compiled run there where the bus has one,
+    /// else back to the run loop.
+    fn exit(&mut self, at: i32, i: usize, target: V) {
+        self.store_dirty();
+        for p in [CPU, BUS, CTX] {
+            self.get_param(p);
+        }
+        self.get(target);
+        self.cycle(i + 1);
+        self.i32(self.h.chain);
+        self.code
+            .extend_from_slice(&[op::CALL_INDIRECT, T_CHAIN, 0, op::I64_EXTEND_I32_U]);
+        let code = self.set();
+        self.get(code);
+        self.code
+            .extend_from_slice(&[op::I32_WRAP_I64, op::IF, 0x40]);
+        for p in [CPU, BUS, CTX] {
+            self.get_param(p);
+        }
+        self.get(target);
+        self.cycle(i + 1);
+        self.get_param(OUT);
+        self.get(code);
+        self.code.extend_from_slice(&[
+            op::I32_WRAP_I64,
+            op::RETURN_CALL_INDIRECT,
+            T_RUN,
+            0,
+            op::END,
+        ]);
+        for p in [CPU, BUS] {
+            self.get_param(p);
+        }
+        self.i32(at);
+        self.pc(i);
+        self.get(target);
+        self.cycle(i);
+        self.get_param(OUT);
+        self.i32(self.h.take);
+        self.code
+            .extend_from_slice(&[op::RETURN_CALL_INDIRECT, T_TAKE, 0]);
     }
 
     // ---- emitting -------------------------------------------------------------

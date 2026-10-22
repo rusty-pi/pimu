@@ -972,6 +972,11 @@ impl<'a> Worker<'a> {
                 chain_until: 0,
                 targets: std::ptr::addr_of!(self.runs.targets),
                 moved: false,
+                #[cfg(pimu_wasm_jit)]
+                wasm_jit: self
+                    .wasm_jit
+                    .as_deref()
+                    .map_or(std::ptr::null(), |j| j as *const _),
             };
             let mut pc = cpu.pc;
             let mut step = None;
@@ -1070,7 +1075,7 @@ impl<'a> Worker<'a> {
                                         break;
                                     }
                                     unlinked = None;
-                                    let ctx = crate::aarch64::compiled::Ctx {
+                                    let mut ctx = crate::aarch64::compiled::Ctx {
                                         gen,
                                         marked: 0,
                                         genp,
@@ -1083,7 +1088,7 @@ impl<'a> Worker<'a> {
                                         code(
                                             cpu,
                                             &mut bus as *mut ParBus as *mut u8,
-                                            &ctx,
+                                            &mut ctx,
                                             pc,
                                             cycles,
                                             out.as_mut_ptr(),
@@ -1302,6 +1307,9 @@ struct ParBus<'a> {
     /// last looked.
     targets: *const super::runs::Targets,
     moved: bool,
+    /// The runs this core compiled to wasm, for one to go on into the next.
+    #[cfg(pimu_wasm_jit)]
+    wasm_jit: *const crate::aarch64::wasmjit::WasmJit,
 }
 
 impl RunBus for ParBus<'_> {
@@ -1310,11 +1318,38 @@ impl RunBus for ParBus<'_> {
     #[cfg(pimu_wasm_jit)]
     const COMPILED: bool = true;
 
+    #[cfg(pimu_wasm_jit)]
+    fn chain_compiled(
+        &mut self,
+        cpu: &Cpu,
+        ctx: &mut crate::aarch64::compiled::Ctx,
+        target: u64,
+        c: u64,
+    ) -> usize {
+        if c >= ctx.chain_until || target & 3 != 0 || self.wasm_jit.is_null() {
+            return 0;
+        }
+        let Some((pa, _, genp)) = cpu.tlb.code_page(target, cpu.el) else {
+            return 0;
+        };
+        let genp = genp as *const u64;
+        // From `SharedRam::code_page`, by way of the run loop.
+        let gen = unsafe { AtomicU64::from_ptr(genp as *mut u64) }.load(Ordering::Relaxed);
+        // This core's, which outlive the bus.
+        let Some((code, _)) = unsafe { &*self.wasm_jit }.find(pa | (target & 0xFFF), gen) else {
+            return 0;
+        };
+        (ctx.gen, ctx.genp) = (gen, genp);
+        self.genp = genp;
+        self.moved = true;
+        code as usize
+    }
+
     /// A run compiled to wasm by this core (`src/aarch64/wasmjit.rs`), whose
     /// table index is `run.jit`, on the page the bus is at.
     #[cfg(pimu_wasm_jit)]
     fn compiled(&mut self, cpu: &mut Cpu, run: &RunOp, pc: u64, c: u64) -> (u64, u64) {
-        let ctx = crate::aarch64::compiled::Ctx {
+        let mut ctx = crate::aarch64::compiled::Ctx {
             // From `SharedRam::code_page`, by way of the run loop.
             gen: unsafe { AtomicU64::from_ptr(self.genp as *mut u64) }.load(Ordering::Relaxed),
             marked: 0,
@@ -1328,7 +1363,7 @@ impl RunBus for ParBus<'_> {
             code(
                 cpu,
                 self as *mut ParBus as *mut u8,
-                &ctx,
+                &mut ctx,
                 pc,
                 c,
                 out.as_mut_ptr(),
