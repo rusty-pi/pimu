@@ -766,9 +766,9 @@ pub struct RunOp {
     link_gen: Cell<u64>,
     /// The run from here compiled (`src/aarch64/jit.rs`), and how often it
     /// was entered before it was.
-    #[cfg(feature = "jit")]
+    #[cfg(pimu_compiled)]
     pub(super) jit: Cell<usize>,
-    #[cfg(feature = "jit")]
+    #[cfg(pimu_compiled)]
     pub(super) hits: Cell<u32>,
 }
 
@@ -794,8 +794,21 @@ pub trait RunBus: Memory {
     /// is the run's page's write generation when it began, `genp` where that
     /// page's generation is, and `marked` that another core holds an
     /// exclusive mark.
-    #[cfg(feature = "jit")]
+    #[cfg(pimu_compiled)]
     fn settle(&mut self, gen: u64, genp: *const u64, marked: bool) -> bool;
+    /// Whether a branch into a run with code of its own ([`RunOp::jit`])
+    /// goes there, through [`Self::compiled`].
+    #[cfg(pimu_compiled)]
+    const COMPILED: bool = false;
+    /// Run `run`'s compiled code at `pc`, `c` cycles in: what [`RunOp::go`]
+    /// would return.
+    #[cfg(pimu_compiled)]
+    fn compiled(&mut self, cpu: &mut Cpu, run: &RunOp, pc: u64, c: u64) -> (u64, u64)
+    where
+        Self: Sized,
+    {
+        run.go(cpu, self, pc, c)
+    }
     /// The run at `next`, where a `BR`, `BLR` or `RET` `c` cycles in went,
     /// if the bus knows it and lets the branch go on into it.
     fn indirect(&mut self, _cpu: &Cpu, _next: u64, _c: u64) -> Option<*const RunOp> {
@@ -815,6 +828,19 @@ macro_rules! go_on {
         // A `Go` of the bus's, which `RunOp::new` made.
         let go: Go<_> = unsafe { std::mem::transmute(run.go) };
         become go($cpu, run, $bus, $pc, $c)
+    }};
+}
+
+/// [`go_on!`] into the first instruction of `run`, or into the run's
+/// compiled code where the bus has some for it ([`RunBus::compiled`]).
+macro_rules! enter {
+    ($run:expr, $cpu:expr, $bus:expr, $pc:expr, $c:expr) => {{
+        let run: &RunOp = $run;
+        #[cfg(pimu_compiled)]
+        if M::COMPILED && run.jit.get() != 0 {
+            return $bus.compiled($cpu, run, $pc, $c);
+        }
+        go_on!(run, $cpu, $bus, $pc, $c);
     }};
 }
 
@@ -838,9 +864,9 @@ impl RunOp {
             go: go as usize,
             link: Cell::new(0),
             link_gen: Cell::new(0),
-            #[cfg(feature = "jit")]
+            #[cfg(pimu_compiled)]
             jit: Cell::new(0),
-            #[cfg(feature = "jit")]
+            #[cfg(pimu_compiled)]
             hits: Cell::new(0),
         }
     }
@@ -854,6 +880,13 @@ impl RunOp {
         // A `Go<M>`, which `new` made.
         let go: Go<M> = unsafe { std::mem::transmute(self.go) };
         go(cpu, self, bus, pc, c)
+    }
+
+    /// The table index of the code compiled for the run from here, 0 for
+    /// none.
+    #[cfg(pimu_compiled)]
+    pub fn compiled_code(&self) -> usize {
+        self.jit.get()
     }
 
     /// Link this branch to `run`, the run at its target, decoded at its
@@ -908,7 +941,7 @@ fn go_kind<M: RunBus, const K: u8>(
     } else if (Kind::BCond as u8..=Kind::Tbz as u8).contains(&K) {
         if next != pc.wrapping_add(4) {
             if let Some(run) = linked(o, bus, c) {
-                go_on!(run, cpu, bus, next, c + 1);
+                enter!(run, cpu, bus, next, c + 1);
             }
             bus.stop(o, next, true);
             return (pc, c);
@@ -945,7 +978,7 @@ fn go_branch<M: RunBus, const K: u8>(
         return (pc, c);
     }
     if let Some(run) = linked(o, bus, c) {
-        go_on!(run, cpu, bus, next, c + 1);
+        enter!(run, cpu, bus, next, c + 1);
     }
     bus.stop(o, next, true);
     (pc, c)
@@ -967,7 +1000,7 @@ fn go_indirect<M: RunBus>(cpu: &mut Cpu, o: &RunOp, bus: &mut M, pc: u64, c: u64
         if let Some(run) = bus.indirect(cpu, next, c) {
             // A run of the bus's, which stays put while the bus vouches for it.
             let run = unsafe { &*run };
-            go_on!(run, cpu, bus, next, c + 1);
+            enter!(run, cpu, bus, next, c + 1);
         }
     }
     bus.stop(o, next, true);

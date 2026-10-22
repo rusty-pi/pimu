@@ -153,6 +153,7 @@ async function powerOn(request) {
   downloads.clear();
   post({ type: "phase", phase: "downloading" });
   const threaded = request.options.parallel ? await loadThreaded() : null;
+  threaded?.set_wasm_jit?.(request.compileHot ?? 0);
   if (request.options.parallel && !threaded) {
     post({ type: "notice", text: "No worker threads for the cores here; they take turns." });
   }

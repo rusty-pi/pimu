@@ -11,7 +11,13 @@ self.addEventListener("message", async ({ data }) => {
     ["plain, taking turns", () => plainSpeed(false, data.insns)],
     ["threaded build, taking turns", glue && (() => glue.arm_speed(false, data.insns))],
     ["threaded build, on threads", glue && (() => glue.arm_speed(true, data.insns))],
-  ].filter(([, run]) => run);
+    ["threaded build, on threads, wasm JIT", glue && data.jit && (() => {
+      glue.set_wasm_jit(data.jit);
+      const run = glue.arm_speed(true, data.insns);
+      glue.set_wasm_jit(0);
+      return run;
+    })],
+  ].filter(([mode, run]) => run && (!data.only || mode.includes(data.only)));
   const runs = [];
   for (let rep = 0; rep < data.reps; rep++) {
     for (const [mode, run] of modes) {
@@ -26,5 +32,6 @@ self.addEventListener("message", async ({ data }) => {
       return [mode, mine.reduce((sum, r) => sum + r.secs, 0) / mine.length];
     }),
   );
-  self.postMessage({ type: "result", isolated: self.crossOriginIsolated, cores: navigator.hardwareConcurrency, mean, runs });
+  const jit = glue?.wasm_jit_stats?.();
+  self.postMessage({ type: "result", jit: jit && { runs: jit[0], modules: jit[1], compileUs: jit[2], entries: jit[3], retired: jit[4], inline: jit[5], called: jit[6] }, isolated: self.crossOriginIsolated, cores: navigator.hardwareConcurrency, mean, runs });
 });

@@ -22,6 +22,8 @@ mod isa_schema;
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(pimu_threads)");
     println!("cargo:rustc-check-cfg=cfg(pimu_tail)");
+    println!("cargo:rustc-check-cfg=cfg(pimu_compiled)");
+    println!("cargo:rustc-check-cfg=cfg(pimu_wasm_jit)");
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let atomics = std::env::var("CARGO_CFG_TARGET_FEATURE")
         .is_ok_and(|f| f.split(',').any(|f| f == "atomics"));
@@ -32,6 +34,12 @@ fn main() {
     // the straight runs' calls into the next instruction tail calls.
     if wasm && atomics {
         println!("cargo:rustc-cfg=pimu_tail");
+        // Runs compiled to wasm at run time, for the cores on threads.
+        println!("cargo:rustc-cfg=pimu_wasm_jit");
+    }
+    // Either backend's compiled runs (`src/aarch64/compiled.rs`).
+    if std::env::var_os("CARGO_FEATURE_JIT").is_some() || (wasm && atomics) {
+        println!("cargo:rustc-cfg=pimu_compiled");
     }
     println!("cargo:rerun-if-changed=specs");
     println!("cargo:rerun-if-changed=src/spec/schema.rs");

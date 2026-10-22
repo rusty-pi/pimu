@@ -400,7 +400,7 @@ test.describe("BCM2711", () => {
     const saved = await app.localState();
     expect(saved.board.boardRev).toBe("a03114");
     expect(saved.otpRows).toBe("33=0\n17=0x3000000");
-    expect(saved.advanced).toEqual({ jitter: "7", faults: "1000", checkCoherency: true, checkAlignment: true, skipUnimpl: true, parallel: false, snapshot: false });
+    expect(saved.advanced).toEqual({ jitter: "7", faults: "1000", checkCoherency: true, checkAlignment: true, skipUnimpl: true, parallel: false, snapshot: false, compile: false });
   });
 });
 

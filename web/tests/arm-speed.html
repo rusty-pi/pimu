@@ -5,7 +5,8 @@
      (web/pkg/) taking turns, then the threaded build (web/pkg-mt/) taking turns
      and on worker threads, `reps` times each in that order. Needs
      scripts/build-wasm.sh and an isolated page: PIMU_COI=1 node web/tests/server.mjs,
-     then open /tests/arm-speed.html?insns=100000000&reps=3. -->
+     then open /tests/arm-speed.html?insns=100000000&reps=3 (and `&jit=<hot>` for
+     the wasm JIT too, `&only=<part of a mode's name>` for some). -->
 <pre id="out">running</pre>
 <script type="module">
   import { ThreadPool } from "../threads.mjs";
@@ -30,5 +31,5 @@
     }
   };
   worker.onerror = (e) => (out.textContent = JSON.stringify({ error: e.message }));
-  worker.postMessage({ type: "start", insns: Number(params.get("insns") ?? 100_000_000), reps: Number(params.get("reps") ?? 3) });
+  worker.postMessage({ type: "start", insns: Number(params.get("insns") ?? 100_000_000), reps: Number(params.get("reps") ?? 3), jit: Number(params.get("jit") ?? 0), only: params.get("only") });
 </script>

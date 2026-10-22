@@ -13,6 +13,8 @@
 //! The interpreter itself is [`Cpu`] and `exec`; `tests/a64_diff.rs` diffs it
 //! against `qemu-aarch64 -cpu cortex-a72`.
 
+#[cfg(pimu_compiled)]
+pub mod compiled;
 mod cpu;
 mod exec;
 pub mod fp;
@@ -23,6 +25,8 @@ pub mod mmu;
 pub mod predecode;
 mod simd;
 pub mod sysreg;
+#[cfg(pimu_wasm_jit)]
+pub mod wasmjit;
 
 pub use cpu::{Abort, Cpu, Exception, Memory, Step, NZCV_C, NZCV_N, NZCV_V, NZCV_Z};
 

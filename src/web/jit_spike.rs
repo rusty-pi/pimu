@@ -191,7 +191,14 @@ fn per_call(f: Compiled, n: u32) -> f64 {
 #[wasm_bindgen]
 pub fn jit_spike() -> Result<String, JsValue> {
     let mut out = Vec::new();
-    for &(funcs, adds) in &[(1u32, 10u32), (16, 10), (128, 10), (1024, 10), (1, 1000), (128, 100)] {
+    for &(funcs, adds) in &[
+        (1u32, 10u32),
+        (16, 10),
+        (128, 10),
+        (1024, 10),
+        (1, 1000),
+        (128, 100),
+    ] {
         let bytes = module(funcs, Body::Adds(adds));
         let i = install(&bytes, funcs)?;
         let right = (i.fns[0])(5) == 5 + i64::from(adds);
@@ -212,7 +219,10 @@ pub fn jit_spike() -> Result<String, JsValue> {
     let one = install(&module(1, Body::Adds(1)), 1)?.fns[0];
     let helper = plus_one as *const () as usize as u32;
     let calls = install(&module(1, Body::Calls(helper, 100)), 1)?.fns[0];
-    out.push(format!(r#"{{"what":"helper","right":{}}}"#, calls(0) == 100));
+    out.push(format!(
+        r#"{{"what":"helper","right":{}}}"#,
+        calls(0) == 100
+    ));
     for round in 0..6 {
         let rust = per_call(plus_one, 2_000_000);
         let compiled = per_call(one, 2_000_000);

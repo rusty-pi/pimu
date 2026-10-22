@@ -5,6 +5,7 @@ test.describe("without threads", () => {
     await app.open("soc");
     await app.drawer.locator("details summary").click();
     await expect(app.drawer.getByRole("checkbox", { name: /worker threads/ })).toBeDisabled();
+    await expect(app.drawer.getByRole("checkbox", { name: /hot code to wasm/ })).toBeDisabled();
   });
 });
 
@@ -18,6 +19,26 @@ test.describe("on a page that can have threads", () => {
     expect((await app.localState()).advanced.parallel).toBe(true);
     await app.powerOn();
     expect((await app.request()).options.parallel).toBe(true);
+  });
+
+  test("compiling the cores' hot code goes along with the threads", async ({ app }) => {
+    await app.open("soc");
+    await app.drawer.locator("details summary").click();
+    await app.drawer.getByRole("checkbox", { name: /worker threads/ }).check();
+    await app.drawer.getByRole("checkbox", { name: /hot code to wasm/ }).check();
+    expect((await app.localState()).advanced.compile).toBe(true);
+    await app.powerOn();
+    const request = await app.request();
+    expect(request.options.parallel).toBe(true);
+    expect(request.compileHot).toBe(64);
+  });
+
+  test("without the threads, nothing is compiled", async ({ app }) => {
+    await app.open("soc");
+    await app.drawer.locator("details summary").click();
+    await app.drawer.getByRole("checkbox", { name: /hot code to wasm/ }).check();
+    await app.powerOn();
+    expect((await app.request()).compileHot).toBeUndefined();
   });
 
   test("the worker's request for threads starts the pool and gets an answer", async ({ app }) => {

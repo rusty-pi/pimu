@@ -713,6 +713,9 @@ struct Worker<'a> {
     /// (`super::runs`), and the instruction words behind them.
     runs: Box<super::runs::Runs<ParBus<'static>>>,
     decoded: Box<Decoded>,
+    /// The runs this core compiled to wasm, once the page asks for them.
+    #[cfg(pimu_wasm_jit)]
+    wasm_jit: Option<Box<crate::aarch64::wasmjit::WasmJit>>,
 }
 
 /// The last device read, and how many times in a row it came back the same.
@@ -737,6 +740,11 @@ impl<'a> Worker<'a> {
             poll: Poll::default(),
             runs: Default::default(),
             decoded: Box::new(Decoded::new()),
+            #[cfg(pimu_wasm_jit)]
+            wasm_jit: match crate::aarch64::wasmjit::hot() {
+                0 => None,
+                hot => Some(Box::new(crate::aarch64::wasmjit::WasmJit::new(hot))),
+            },
         }
     }
 
@@ -986,6 +994,8 @@ impl<'a> Worker<'a> {
                     if let Some((mut pa_page, mut code, mut genp)) = page {
                         let effects = cpu.shared_effects;
                         let (runs, decoded) = (&mut *self.runs, &mut *self.decoded);
+                        #[cfg(pimu_wasm_jit)]
+                        let wasm_jit = &mut self.wasm_jit;
                         // Odd while runs are decoded from the page, so that a
                         // store into it moves it on (`SharedRam::code_page`).
                         let gen_of = |genp: *const u64| {
@@ -1031,6 +1041,8 @@ impl<'a> Worker<'a> {
                                 .and_then(|jit| Some((jit, jit.find(pa, gen)?)));
                             #[cfg(not(feature = "jit"))]
                             let compiled: Option<&()> = None;
+                            #[cfg(pimu_wasm_jit)]
+                            let wasm_run = wasm_jit.as_deref().and_then(|j| j.find(pa, gen));
                             let (at, c) = match compiled {
                                 #[cfg(feature = "jit")]
                                 Some((jit, t)) => {
@@ -1051,12 +1063,47 @@ impl<'a> Worker<'a> {
                                 }
                                 #[cfg(not(feature = "jit"))]
                                 Some(_) => unreachable!(),
+                                #[cfg(pimu_wasm_jit)]
+                                None if wasm_run.is_some() => {
+                                    let (code, len) = wasm_run.unwrap();
+                                    if cycles + len > limit {
+                                        break;
+                                    }
+                                    unlinked = None;
+                                    let ctx = crate::aarch64::compiled::Ctx {
+                                        gen,
+                                        marked: 0,
+                                        genp,
+                                        chain_until: chain_end.min(cycles + super::runs::MAX_LEN),
+                                    };
+                                    let mut out = [0u64; 2];
+                                    // Compiled for `ParBus`, from instructions
+                                    // the translation keeps.
+                                    unsafe {
+                                        code(
+                                            cpu,
+                                            &mut bus as *mut ParBus as *mut u8,
+                                            &ctx,
+                                            pc,
+                                            cycles,
+                                            out.as_mut_ptr(),
+                                        )
+                                    };
+                                    if std::mem::take(&mut bus.moved) {
+                                        va_page = u64::MAX;
+                                    }
+                                    (out[0], out[1])
+                                }
                                 None => {
                                     let runs_epoch = runs.epoch;
                                     let ops = runs.get(pa, code, genp, decoded);
                                     #[cfg(feature = "jit")]
                                     if let Some(jit) = &sh.jit {
                                         jit.entered(ops, pa, gen);
+                                    }
+                                    #[cfg(pimu_wasm_jit)]
+                                    if let Some(jit) = wasm_jit.as_deref_mut() {
+                                        jit.entered::<ParBus<'static>>(ops, pa, gen, runs_epoch);
                                     }
                                     let (len, first) = (ops.len() as u64, ops.as_ptr());
                                     if len == 0 || cycles + len > limit {
@@ -1260,6 +1307,36 @@ struct ParBus<'a> {
 impl RunBus for ParBus<'_> {
     const INDIRECT: bool = true;
 
+    #[cfg(pimu_wasm_jit)]
+    const COMPILED: bool = true;
+
+    /// A run compiled to wasm by this core (`src/aarch64/wasmjit.rs`), whose
+    /// table index is `run.jit`, on the page the bus is at.
+    #[cfg(pimu_wasm_jit)]
+    fn compiled(&mut self, cpu: &mut Cpu, run: &RunOp, pc: u64, c: u64) -> (u64, u64) {
+        let ctx = crate::aarch64::compiled::Ctx {
+            // From `SharedRam::code_page`, by way of the run loop.
+            gen: unsafe { AtomicU64::from_ptr(self.genp as *mut u64) }.load(Ordering::Relaxed),
+            marked: 0,
+            genp: self.genp,
+            chain_until: self.chain_until,
+        };
+        let mut out = [0u64; 2];
+        // A function of this core's table, compiled for `ParBus`.
+        unsafe {
+            let code: crate::aarch64::wasmjit::Code = std::mem::transmute(run.compiled_code());
+            code(
+                cpu,
+                self as *mut ParBus as *mut u8,
+                &ctx,
+                pc,
+                c,
+                out.as_mut_ptr(),
+            );
+        }
+        (out[0], out[1])
+    }
+
     #[inline(always)]
     fn at(&mut self, c: u64) {
         self.cycles = c;
@@ -1305,7 +1382,7 @@ impl RunBus for ParBus<'_> {
 
     /// A store-exclusive is never compiled inline, so `marked` has nothing
     /// to say here: the compare-exchange is the bus's.
-    #[cfg(feature = "jit")]
+    #[cfg(pimu_compiled)]
     #[inline(always)]
     fn settle(&mut self, gen: u64, genp: *const u64, _: bool) -> bool {
         // The page's generation, from `SharedRam::code_page`.

@@ -149,9 +149,9 @@ fn data_slot(va: u64, kind: Kind) -> usize {
 const NO_HINT: (u64, u64) = (u64::MAX, 0);
 
 /// Where [`Tlb::host`] and the fields of its entries sit, for compiled code
-/// that probes it (`src/aarch64/jit.rs`): byte offsets, the size of an entry,
+/// that probes it (`src/aarch64/jit.rs`, `wasmjit.rs`): byte offsets, the size of an entry,
 /// and the first slot for reads and for writes.
-#[cfg(feature = "jit")]
+#[cfg(pimu_compiled)]
 pub(super) struct HostLayout {
     pub host: usize,
     pub size: usize,
@@ -184,7 +184,7 @@ pub(super) const CODE_LAYOUT: CodeLayout = CodeLayout {
     gen: std::mem::offset_of!((u64, u64, usize, usize), 3),
 };
 
-#[cfg(feature = "jit")]
+#[cfg(pimu_compiled)]
 pub(super) const HOST_LAYOUT: HostLayout = HostLayout {
     host: std::mem::offset_of!(Tlb, host),
     size: std::mem::size_of::<Host>(),

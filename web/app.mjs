@@ -60,7 +60,7 @@ const DEFAULT_STATE = {
   display: false,
   board: { stepping: "c0", memoryMb: 1024, boardRev: "" },
   otpRows: "",
-  advanced: { jitter: "", faults: "", checkCoherency: false, checkAlignment: false, skipUnimpl: false, parallel: false, snapshot: false },
+  advanced: { jitter: "", faults: "", checkCoherency: false, checkAlignment: false, skipUnimpl: false, parallel: false, snapshot: false, compile: false },
   log: ["io"],
 };
 
@@ -366,6 +366,8 @@ async function buildRequest() {
   if (s.advanced.faults.trim()) options.faults = Number(s.advanced.faults);
 
   const request = { type: "power-on", options, images: {}, boot: { kind: "none" } };
+  // Runs entered this often are compiled; not a board setting, so beside the options.
+  if (options.parallel && s.advanced.compile) request.compileHot = 64;
   request.eeprom = info.bytes;
 
   if (s.sd.mode === "none") options.noSdCard = true;
@@ -1212,7 +1214,9 @@ const PANELS = {
         checkbox("Run the ARM cores on worker threads (experimental)", a.parallel && canHaveThreads(), (v) => (a.parallel = v),
           canHaveThreads()
             ? "Each core gets a thread of its own, so a Linux boot can use the machine's cores. A run no longer repeats exactly."
-            : "Needs a cross-origin isolated page and the threaded build; this page has neither, so the cores take turns.", !canHaveThreads())));
+            : "Needs a cross-origin isolated page and the threaded build; this page has neither, so the cores take turns.", !canHaveThreads()),
+        checkbox("Compile the cores' hot code to wasm (experimental)", a.compile && canHaveThreads(), (v) => (a.compile = v),
+          "With the cores on threads: each core turns the code it runs most into WebAssembly as it goes.", !canHaveThreads())));
   },
 };
 
@@ -1374,6 +1378,7 @@ const CHANGE_FIELDS = [
   ["advanced.skipUnimpl", "soc", "Step over instructions the decoder lacks", onOff],
   ["advanced.parallel", "soc", "ARM cores on worker threads", onOff],
   ["advanced.snapshot", "soc", "Start from a snapshot at the ARM's release", onOff],
+  ["advanced.compile", "soc", "Compile the cores' hot code to wasm", onOff],
   ["log", "log", "Channels", (v) => (v.length ? v.join(", ") : "none")],
 ];
 

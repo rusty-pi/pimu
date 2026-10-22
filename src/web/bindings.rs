@@ -280,3 +280,39 @@ pub fn arm_speed(parallel: bool, per_core: f64) -> Vec<f64> {
         vec![f64::from(u8::from(s.threaded)), s.insns as f64, s.secs]
     })
 }
+
+/// Compile the threaded cores' straight runs to wasm once they have been
+/// entered `hot` times (`src/aarch64/wasmjit.rs`), or not at all for 0; for
+/// the cores started after. False in a build without it.
+#[wasm_bindgen]
+pub fn set_wasm_jit(hot: u32) -> bool {
+    #[cfg(pimu_wasm_jit)]
+    {
+        crate::aarch64::wasmjit::set_hot(hot);
+        true
+    }
+    #[cfg(not(pimu_wasm_jit))]
+    {
+        let _ = hot;
+        false
+    }
+}
+
+/// What the wasm JIT did, every core's: runs and modules compiled,
+/// microseconds compiling, entries into compiled code and the instructions
+/// retired from them, instructions compiled inline and through their
+/// handlers.
+#[wasm_bindgen]
+pub fn wasm_jit_stats() -> Vec<f64> {
+    #[cfg(pimu_wasm_jit)]
+    {
+        use crate::aarch64::wasmjit::{STATS, STATS_CALLED, STATS_INLINE};
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut v: Vec<f64> = STATS.iter().map(|a| a.load(Relaxed) as f64).collect();
+        v.push(STATS_INLINE.load(Relaxed) as f64);
+        v.push(STATS_CALLED.load(Relaxed) as f64);
+        v
+    }
+    #[cfg(not(pimu_wasm_jit))]
+    Vec::new()
+}
