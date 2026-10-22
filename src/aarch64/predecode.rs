@@ -805,6 +805,26 @@ pub trait RunBus: Memory {
 
 type Go<M> = fn(&mut Cpu, &RunOp, &mut M, u64, u64) -> (u64, u64);
 
+/// Go on into `run`'s instruction at `pc`, `c` cycles in: as a tail call
+/// where the compiler is told to make one (`pimu_tail`), since a wasm engine
+/// turns a plain call there into a frame per instruction of the chain.
+#[cfg(pimu_tail)]
+macro_rules! go_on {
+    ($run:expr, $cpu:expr, $bus:expr, $pc:expr, $c:expr) => {{
+        let run: &RunOp = $run;
+        // A `Go` of the bus's, which `RunOp::new` made.
+        let go: Go<_> = unsafe { std::mem::transmute(run.go) };
+        become go($cpu, run, $bus, $pc, $c)
+    }};
+}
+
+#[cfg(not(pimu_tail))]
+macro_rules! go_on {
+    ($run:expr, $cpu:expr, $bus:expr, $pc:expr, $c:expr) => {
+        return $run.go($cpu, $bus, $pc, $c)
+    };
+}
+
 impl RunOp {
     /// `op` in a run on bus `M`; `last` when it is the run's last.
     pub fn new<M: RunBus>(op: Op, last: bool) -> RunOp {
@@ -887,7 +907,11 @@ fn go_kind<M: RunBus, const K: u8>(
         true
     } else if (Kind::BCond as u8..=Kind::Tbz as u8).contains(&K) {
         if next != pc.wrapping_add(4) {
-            return taken(cpu, o, bus, pc, next, c);
+            if let Some(run) = linked(o, bus, c) {
+                go_on!(run, cpu, bus, next, c + 1);
+            }
+            bus.stop(o, next, true);
+            return (pc, c);
         }
         true
     } else if K <= Kind::Bl as u8 {
@@ -900,7 +924,7 @@ fn go_kind<M: RunBus, const K: u8>(
     if on {
         // Not the last of its run, which `go_last` runs.
         let n = unsafe { &*(o as *const RunOp).add(1) };
-        return n.go(cpu, bus, next, c + 1);
+        go_on!(n, cpu, bus, next, c + 1);
     }
     bus.stop(o, next, true);
     (pc, c)
@@ -920,28 +944,20 @@ fn go_branch<M: RunBus, const K: u8>(
         bus.stop(o, next, true);
         return (pc, c);
     }
-    taken(cpu, o, bus, pc, next, c)
-}
-
-/// The branch `o` at `pc` taken to `next`: on into the run it is linked to
-/// where `bus` lets it.
-#[inline(always)]
-pub(super) fn taken<M: RunBus>(
-    cpu: &mut Cpu,
-    o: &RunOp,
-    bus: &mut M,
-    pc: u64,
-    next: u64,
-    c: u64,
-) -> (u64, u64) {
-    let link = o.link.get();
-    if link != 0 && bus.chain(c, o.link_gen.get()) {
-        // A run on this page from its current generation, which stays put.
-        let run = unsafe { &*(link as *const RunOp) };
-        return run.go(cpu, bus, next, c + 1);
+    if let Some(run) = linked(o, bus, c) {
+        go_on!(run, cpu, bus, next, c + 1);
     }
     bus.stop(o, next, true);
     (pc, c)
+}
+
+/// The run the branch `o`, taken `c` cycles in, is linked to, where `bus`
+/// lets it go on into it.
+#[inline(always)]
+fn linked<'a, M: RunBus>(o: &RunOp, bus: &M, c: u64) -> Option<&'a RunOp> {
+    let link = o.link.get();
+    // A run on this page from its current generation, which stays put.
+    (link != 0 && bus.chain(c, o.link_gen.get())).then(|| unsafe { &*(link as *const RunOp) })
 }
 
 /// `BR`, `BLR` or `RET`: on into the run at its target where `bus` knows it.
@@ -950,7 +966,8 @@ fn go_indirect<M: RunBus>(cpu: &mut Cpu, o: &RunOp, bus: &mut M, pc: u64, c: u64
     if !cpu.faulted() {
         if let Some(run) = bus.indirect(cpu, next, c) {
             // A run of the bus's, which stays put while the bus vouches for it.
-            return unsafe { &*run }.go(cpu, bus, next, c + 1);
+            let run = unsafe { &*run };
+            go_on!(run, cpu, bus, next, c + 1);
         }
     }
     bus.stop(o, next, true);

@@ -86,8 +86,10 @@ It needs more than the build:
 
 - **Shared memory.** `web/pkg-mt/` is the same library linked for
   `SharedArrayBuffer` (`scripts/build-wasm.sh`: atomics, `-Zbuild-std`, up to
-  4 GiB of memory). `web/pkg/` stays the plain build, which is what a page that
-  cannot have threads runs.
+  4 GiB of memory, tail calls). `web/pkg/` stays the plain build, which is what
+  a page that cannot have threads runs, and so does one whose browser cannot
+  compile the threaded module (tail calls: Chrome 112, Firefox 121, Safari
+  18.2).
 - **A cross-origin isolated page**, because that is the only kind that gets a
   `SharedArrayBuffer`: documents and workers served with
   `Cross-Origin-Opener-Policy: same-origin` and

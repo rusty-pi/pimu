@@ -21,11 +21,17 @@ mod isa_schema;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(pimu_threads)");
+    println!("cargo:rustc-check-cfg=cfg(pimu_tail)");
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let atomics = std::env::var("CARGO_CFG_TARGET_FEATURE")
         .is_ok_and(|f| f.split(',').any(|f| f == "atomics"));
     if !wasm || atomics {
         println!("cargo:rustc-cfg=pimu_threads");
+    }
+    // The threaded wasm build is the nightly one, which can be told to make
+    // the straight runs' calls into the next instruction tail calls.
+    if wasm && atomics {
+        println!("cargo:rustc-cfg=pimu_tail");
     }
     println!("cargo:rerun-if-changed=specs");
     println!("cargo:rerun-if-changed=src/spec/schema.rs");
