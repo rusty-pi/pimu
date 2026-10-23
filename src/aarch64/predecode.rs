@@ -895,12 +895,6 @@ impl RunOp {
         go(cpu, self, bus, pc, c)
     }
 
-    /// How often the run from here was entered before it was compiled.
-    #[cfg(pimu_compiled)]
-    pub fn hits(&self) -> u32 {
-        self.hits.get()
-    }
-
     /// The table index of the code compiled for the run from here, 0 for
     /// none.
     #[cfg(pimu_compiled)]

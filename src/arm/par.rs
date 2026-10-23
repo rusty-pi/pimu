@@ -1104,6 +1104,7 @@ impl<'a> Worker<'a> {
                                     if std::mem::take(&mut bus.moved) {
                                         va_page = u64::MAX;
                                     }
+                                    crate::aarch64::wasmjit::ran(out[1] - cycles);
                                     (out[0], out[1])
                                 }
                                 None => {
@@ -1125,9 +1126,8 @@ impl<'a> Worker<'a> {
                                                 ops,
                                                 pa,
                                                 gen,
-                                                runs_epoch,
                                                 code,
-                                                &|pa| runs.hits(pa, genp),
+                                                &|pa, gen| runs.first(pa, genp, gen),
                                             );
                                         }
                                         ops

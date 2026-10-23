@@ -57,6 +57,27 @@ pub fn hot() -> u32 {
 /// entries into compiled runs with the instructions retired in them.
 pub static STATS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
+thread_local! {
+    static RAN: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Compiled code entered from the run loop ran `cycles`: counted in
+/// [`STATS`] every so often, not to share a line between cores each time.
+#[inline(always)]
+pub fn ran(cycles: u64) {
+    RAN.with(|r| {
+        let (n, c) = r.get();
+        let (n, c) = (n + 1, c + cycles);
+        if n == 1024 {
+            STATS[3].fetch_add(n, Relaxed);
+            STATS[4].fetch_add(c, Relaxed);
+            r.set((0, 0));
+        } else {
+            r.set((n, c));
+        }
+    });
+}
+
 /// `(cpu, bus, ctx, pc, cycles, out)`, as [`super::jit`]'s compiled runs.
 pub type Code = unsafe extern "C" fn(*mut Cpu, *mut u8, *const Ctx, u64, u64, *mut u64);
 
@@ -74,11 +95,11 @@ struct Wanted {
     page: u64,
     gen: u64,
     runs: Vec<(u32, Box<[RunOp]>)>,
-    /// The hot run's first instruction in the core's runs, as of their
-    /// epoch `epoch`: told where its code is, for the branches linked to it.
-    first: *const RunOp,
-    epoch: u64,
 }
+
+/// The first instruction of the core's run at a PA, decoded at a page
+/// generation, if the core has it: from [`crate::arm::runs::Runs::first`].
+pub type CoreRun<'a> = &'a dyn Fn(u64, u64) -> Option<*const RunOp>;
 
 /// One core's compiled runs.
 pub struct WasmJit {
@@ -131,9 +152,8 @@ impl WasmJit {
         ops: &[RunOp],
         pa: u64,
         gen: u64,
-        epoch: u64,
         code: *const u32,
-        entries: &dyn Fn(u64) -> u32,
+        core_run: CoreRun,
     ) {
         let Some(first) = ops.first() else {
             return;
@@ -141,7 +161,7 @@ impl WasmJit {
         if !self.queue.is_empty() {
             self.waited += 1;
             if self.waited >= WAIT {
-                self.flush::<M>(epoch);
+                self.flush::<M>(core_run);
             }
         }
         let hits = first.hits.get();
@@ -150,23 +170,17 @@ impl WasmJit {
         }
         first.hits.set(hits + 1);
         if hits + 1 == self.hot {
-            self.want::<M>(ops.as_ptr(), pa, gen, epoch, code, entries);
+            self.want::<M>(pa, gen, code, core_run);
         }
     }
 
     /// The run at `pa` and those of its page it branches to, and they to,
     /// as a region: those of them the core has entered a fair part as often
-    /// as this one, by `entries`.
+    /// as this one.
     #[inline(never)]
-    fn want<M: RunBus>(
-        &mut self,
-        first: *const RunOp,
-        pa: u64,
-        gen: u64,
-        epoch: u64,
-        code: *const u32,
-        entries: &dyn Fn(u64) -> u32,
-    ) {
+    fn want<M: RunBus>(&mut self, pa: u64, gen: u64, code: *const u32, core_run: CoreRun) {
+        // The core's runs, which stay put while it looks at them.
+        let entries = |pa| core_run(pa, gen).map_or(0, |r| unsafe { (*r).hits.get() });
         let warm = (self.hot / 8).max(1);
         let page = pa & !0xFFF;
         let mut runs: Vec<(u32, Box<[RunOp]>)> = Vec::new();
@@ -216,25 +230,23 @@ impl WasmJit {
             page: pa & !0xFFF,
             gen,
             runs,
-            first,
-            epoch,
         });
         if self.queue.len() >= BATCH {
-            self.flush::<M>(epoch);
+            self.flush::<M>(core_run);
         }
     }
 
     #[inline(never)]
-    fn flush<M: RunBus>(&mut self, epoch: u64) {
+    fn flush<M: RunBus>(&mut self, core_run: CoreRun) {
         self.waited = 0;
         let queue = std::mem::take(&mut self.queue);
-        if let Err(e) = self.compile::<M>(queue, epoch) {
+        if let Err(e) = self.compile::<M>(queue, core_run) {
             web_sys_warn(&e);
             self.hot = u32::MAX;
         }
     }
 
-    fn compile<M: RunBus>(&mut self, queue: Vec<Wanted>, epoch: u64) -> Result<(), JsValue> {
+    fn compile<M: RunBus>(&mut self, queue: Vec<Wanted>, core_run: CoreRun) -> Result<(), JsValue> {
         let t = Instant::now();
         let table: WebAssembly::Table = wasm_bindgen::function_table().unchecked_into();
         let base = table.grow(queue.len() as u32)?;
@@ -253,13 +265,13 @@ impl WasmJit {
         Reflect::set(&imports, &"env".into(), &env)?;
         WebAssembly::Instance::new(&module, &imports)?;
         for (i, w) in queue.into_iter().enumerate() {
-            if w.epoch == epoch {
-                // Still in the core's runs, which have not been dropped
-                // since; their page's generation is the link's to check.
-                unsafe { (*w.first).jit.set(base as usize + i) };
-            }
             for (off, ops) in w.runs {
                 let pa = w.page | u64::from(off) << 2;
+                if let Some(run) = core_run(pa, w.gen) {
+                    // In the core's runs, for the branches linked to it,
+                    // which check its page's generation.
+                    unsafe { (*run).jit.set(base as usize + i) };
+                }
                 self.slots[slot(pa)] = Some(Translation {
                     pa,
                     gen: w.gen,
@@ -523,14 +535,10 @@ struct Lower<'a> {
     starts: Vec<u32>,
     run: usize,
     off: u32,
-    /// The registers and flags the region reads and writes, from a first
-    /// pass over it, which the second loads up front.
-    read: [bool; 32],
-    wrote: [bool; 32],
 }
 
 /// The body of the function for the region `runs`: a loop round a
-/// `br_table` on the PC's offset in the page, into the code of the run there.
+/// dispatch on the PC's offset in the page, into the code of the run there.
 fn lower(runs: &[(u32, Box<[RunOp]>)], h: &Helpers) -> Vec<u8> {
     let starts: Vec<u32> = runs.iter().map(|r| r.0).collect();
     let mut l = Lower {
@@ -544,15 +552,7 @@ fn lower(runs: &[(u32, Box<[RunOp]>)], h: &Helpers) -> Vec<u8> {
         starts,
         run: 0,
         off: 0,
-        read: [false; 32],
-        wrote: [false; 32],
     };
-    l.region(runs);
-    let (read, wrote) = (l.read, l.wrote);
-    l.code.clear();
-    (l.locals, l.temp) = (0, 0);
-    l.read = read;
-    l.wrote = wrote;
     l.prologue();
     l.region(runs);
     let mut body = Vec::new();
@@ -565,16 +565,8 @@ fn lower(runs: &[(u32, Box<[RunOp]>)], h: &Helpers) -> Vec<u8> {
 }
 
 impl Lower<'_> {
-    /// Load what the region uses, and the budget and generation it checks.
+    /// Load the budget and generation the region checks.
     fn prologue(&mut self) {
-        for r in 0..31u8 {
-            if self.read[r as usize] || self.wrote[r as usize] {
-                self.load_reg(r);
-            }
-        }
-        if self.read[31] || self.wrote[31] {
-            self.load_nzcv();
-        }
         for (local, off, wide) in [
             (UNTIL, offset_of!(Ctx, chain_until), true),
             (GEN, offset_of!(Ctx, gen), true),
@@ -646,35 +638,10 @@ impl Lower<'_> {
     }
 
     /// The registers as a run of the region starts, whichever way it was
-    /// reached: everything the region uses is in its local, and what it
-    /// writes is newer than the core's.
+    /// reached: all in the core, none in their locals yet.
     fn start_run(&mut self) {
-        let state = |read: bool, wrote: bool| match (read, wrote) {
-            (_, true) => Held::Dirty,
-            (true, false) => Held::Clean,
-            _ => Held::No,
-        };
-        for r in 0..31 {
-            self.regs[r] = state(self.read[r], self.wrote[r]);
-        }
-        self.nzcv = state(self.read[31], self.wrote[31]);
-    }
-
-    /// Bring back into their locals what a handler left the core with, as
-    /// [`Self::start_run`] expects of a branch back into the region.
-    fn reload(&mut self) {
-        for r in 0..31u8 {
-            if self.regs[r as usize] == Held::No
-                && (self.read[r as usize] || self.wrote[r as usize])
-            {
-                self.load_reg(r);
-                self.regs[r as usize] = Held::Clean;
-            }
-        }
-        if self.nzcv == Held::No && (self.read[31] || self.wrote[31]) {
-            self.load_nzcv();
-            self.nzcv = Held::Clean;
-        }
+        self.regs.fill(Held::No);
+        self.nzcv = Held::No;
     }
 
     /// After the branch `at`, the run's instruction `i`, to `target`: on
@@ -686,7 +653,7 @@ impl Lower<'_> {
         if !inside {
             return self.exit(at, i, target);
         }
-        self.reload();
+        self.store_dirty();
         self.cycle(i + 1);
         let c = self.set();
         self.get(c);
@@ -755,6 +722,13 @@ impl Lower<'_> {
                 } else {
                     self.branch(at, i, away, to, 0);
                 }
+                STATS_INLINE.fetch_add(1, Relaxed);
+                return;
+            }
+            if i + 1 == ops.len() && op.indirect_branch() && (op.insn >> 21) & 3 != 3 {
+                let rn = ((op.insn >> 5) & 31) as u8;
+                let target = self.xr(rn, true);
+                self.chain_or_last(at, i, target, (op.insn >> 21) & 3 == 1);
                 STATS_INLINE.fetch_add(1, Relaxed);
                 return;
             }
@@ -853,6 +827,58 @@ impl Lower<'_> {
         self.i32(self.h.take);
         self.code
             .extend_from_slice(&[op::RETURN_CALL_INDIRECT, T_TAKE, 0]);
+    }
+
+    /// `BR`, `BLR` (`link`) or `RET`, the run's instruction `i` at `at`, to
+    /// `target`: on into the compiled run there where the bus has one, else
+    /// the instruction as the interpreter runs it, with the registers as
+    /// they were before it.
+    fn chain_or_last(&mut self, at: i32, i: usize, target: V, link: bool) {
+        self.store_dirty();
+        for p in [CPU, BUS, CTX] {
+            self.get_param(p);
+        }
+        self.get(target);
+        self.cycle(i + 1);
+        self.i32(self.h.chain);
+        self.code
+            .extend_from_slice(&[op::CALL_INDIRECT, T_CHAIN, 0, op::I64_EXTEND_I32_U]);
+        let code = self.set();
+        self.get(code);
+        self.code
+            .extend_from_slice(&[op::I32_WRAP_I64, op::IF, 0x40]);
+        if link {
+            self.get_param(CPU);
+            self.pc(i);
+            self.i64(4);
+            self.code
+                .extend_from_slice(&[op::I64_ADD, op::I64_STORE, 3]);
+            leb_u(&mut self.code, (offset_of!(Cpu, x) + 8 * 30) as u64);
+        }
+        for p in [CPU, BUS, CTX] {
+            self.get_param(p);
+        }
+        self.get(target);
+        self.cycle(i + 1);
+        self.get_param(OUT);
+        self.get(code);
+        self.code.extend_from_slice(&[
+            op::I32_WRAP_I64,
+            op::RETURN_CALL_INDIRECT,
+            T_RUN,
+            0,
+            op::END,
+        ]);
+        for p in [CPU, BUS] {
+            self.get_param(p);
+        }
+        self.i32(at);
+        self.pc(i);
+        self.cycle(i);
+        self.get_param(OUT);
+        self.i32(self.h.last);
+        self.code
+            .extend_from_slice(&[op::RETURN_CALL_INDIRECT, T_RUN, 0]);
     }
 
     // ---- emitting -------------------------------------------------------------
@@ -988,7 +1014,6 @@ impl Lower<'_> {
 
     /// `Xr`'s value as it is now, in a temporary of its own.
     fn reg(&mut self, r: u8) -> V {
-        self.read[r as usize] = true;
         if self.regs[r as usize] == Held::No {
             self.load_reg(r);
             self.regs[r as usize] = Held::Clean;
@@ -1002,7 +1027,6 @@ impl Lower<'_> {
         self.code.push(op::LOCAL_SET);
         leb_u(&mut self.code, u64::from(REGS + u32::from(r)));
         self.regs[r as usize] = Held::Dirty;
-        self.wrote[r as usize] = true;
     }
 
     /// `Xr`/`Wr`, XZR for 31.
@@ -1031,7 +1055,6 @@ impl Lower<'_> {
     }
 
     fn get_nzcv(&mut self) -> V {
-        self.read[31] = true;
         if self.nzcv == Held::No {
             self.load_nzcv();
             self.nzcv = Held::Clean;
@@ -1045,7 +1068,6 @@ impl Lower<'_> {
         self.code.push(op::LOCAL_SET);
         leb_u(&mut self.code, NZCV.into());
         self.nzcv = Held::Dirty;
-        self.wrote[31] = true;
     }
 
     /// Write back what is newer than the core's, leaving the cache as it is
