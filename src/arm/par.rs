@@ -85,6 +85,11 @@ const POLL_MASK: u64 = 63;
 /// VPU steps between two looks at the shared clock.
 const SYNC_STEPS: u32 = 64;
 
+/// Compiled code entered from the interpreter inside compiled code, at
+/// most this deep (`ParBus::nested`).
+#[cfg(pimu_wasm_jit)]
+const MAX_NESTED: u32 = 4;
+
 /// How long a core with nothing to run sleeps before it looks again.
 const NAP: Duration = Duration::from_micros(100);
 
@@ -977,6 +982,8 @@ impl<'a> Worker<'a> {
                     .wasm_jit
                     .as_deref()
                     .map_or(std::ptr::null(), |j| j as *const _),
+                #[cfg(pimu_wasm_jit)]
+                nested: 0,
             };
             let mut pc = cpu.pc;
             let mut step = None;
@@ -1107,9 +1114,24 @@ impl<'a> Worker<'a> {
                                         jit.entered(ops, pa, gen);
                                     }
                                     #[cfg(pimu_wasm_jit)]
-                                    if let Some(jit) = wasm_jit.as_deref_mut() {
-                                        jit.entered::<ParBus<'static>>(ops, pa, gen, runs_epoch);
-                                    }
+                                    let ops = {
+                                        // In `runs`, which stay put while this looks at them.
+                                        let ops = unsafe {
+                                            std::slice::from_raw_parts(ops.as_ptr(), ops.len())
+                                        };
+                                        if let Some(jit) = wasm_jit.as_deref_mut() {
+                                            let runs = &*runs;
+                                            jit.entered::<ParBus<'static>>(
+                                                ops,
+                                                pa,
+                                                gen,
+                                                runs_epoch,
+                                                code,
+                                                &|pa| runs.hits(pa, genp),
+                                            );
+                                        }
+                                        ops
+                                    };
                                     let (len, first) = (ops.len() as u64, ops.as_ptr());
                                     if len == 0 || cycles + len > limit {
                                         break;
@@ -1310,6 +1332,10 @@ struct ParBus<'a> {
     /// The runs this core compiled to wasm, for one to go on into the next.
     #[cfg(pimu_wasm_jit)]
     wasm_jit: *const crate::aarch64::wasmjit::WasmJit,
+    /// How deep in compiled code entered from the interpreter this is: each
+    /// time is a call, not a tail call, and the stack is a worker's.
+    #[cfg(pimu_wasm_jit)]
+    nested: u32,
 }
 
 impl RunBus for ParBus<'_> {
@@ -1349,6 +1375,9 @@ impl RunBus for ParBus<'_> {
     /// table index is `run.jit`, on the page the bus is at.
     #[cfg(pimu_wasm_jit)]
     fn compiled(&mut self, cpu: &mut Cpu, run: &RunOp, pc: u64, c: u64) -> (u64, u64) {
+        if self.nested >= MAX_NESTED {
+            return run.go(cpu, self, pc, c);
+        }
         let mut ctx = crate::aarch64::compiled::Ctx {
             // From `SharedRam::code_page`, by way of the run loop.
             gen: unsafe { AtomicU64::from_ptr(self.genp as *mut u64) }.load(Ordering::Relaxed),
@@ -1360,6 +1389,7 @@ impl RunBus for ParBus<'_> {
         // A function of this core's table, compiled for `ParBus`.
         unsafe {
             let code: crate::aarch64::wasmjit::Code = std::mem::transmute(run.compiled_code());
+            self.nested += 1;
             code(
                 cpu,
                 self as *mut ParBus as *mut u8,
@@ -1368,6 +1398,7 @@ impl RunBus for ParBus<'_> {
                 c,
                 out.as_mut_ptr(),
             );
+            self.nested -= 1;
         }
         (out[0], out[1])
     }

@@ -1,10 +1,13 @@
 //! Straight runs compiled to wasm at run time, for the cores on threads in
 //! the browser (#209).
 //!
-//! A core that has entered a run [`hot`] times queues it. Once enough are
-//! queued it encodes them as one module, which imports this module's memory
-//! and function table, and installs the module's functions at the end of the
-//! table. A compiled run is then called by its table index, and calls the
+//! A core that has entered a run [`hot`] times queues it, with the runs of
+//! its page that it reaches by direct branches: a region, compiled as one
+//! function that loops from run to run inside it without leaving, so that a
+//! hot loop is one function V8 soon optimises. Once enough are queued the
+//! core encodes them as one module, which imports this module's memory and
+//! function table, and installs the module's functions at the end of the
+//! table. A compiled region is then called by its table index, and calls the
 //! helpers of [`super::compiled`] by theirs. As with the Cranelift backend
 //! (`src/aarch64/jit.rs`), register-only instructions and the conditions of
 //! branches run inline, with the general registers and `NZCV` in wasm locals
@@ -29,12 +32,17 @@ use super::predecode::{Kind, Op, RunBus, RunOp};
 /// Entries before a run is compiled; 0 compiles nothing. The page sets it.
 static HOT: AtomicU32 = AtomicU32::new(0);
 
-/// Runs a core compiles at a time, as one module, unless the queue has
+/// Regions a core compiles at a time, as one module, unless the queue has
 /// waited this many entries into runs.
-const BATCH: usize = 32;
-const WAIT: u32 = 4096;
+const BATCH: usize = 256;
+const WAIT: u32 = 1 << 16;
+/// Runs a region takes at most.
+const REGION: usize = 48;
 
-const SLOTS: usize = 1 << 14;
+const SLOTS: usize = 1 << 18;
+/// Bytes of wasm a core compiles at most: V8 never frees code a table
+/// refers to, and all of a page's is under one limit.
+const BUDGET: usize = 64 << 20;
 
 /// Compile runs once they have been entered `hot` times, or none for 0.
 pub fn set_hot(hot: u32) {
@@ -52,22 +60,22 @@ pub static STATS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// `(cpu, bus, ctx, pc, cycles, out)`, as [`super::jit`]'s compiled runs.
 pub type Code = unsafe extern "C" fn(*mut Cpu, *mut u8, *const Ctx, u64, u64, *mut u64);
 
+/// A run some region's code starts at.
 struct Translation {
     pa: u64,
     gen: u64,
     code: usize,
     len: u64,
-    /// The instructions the code refers to, which have to stay put as long
-    /// as it lives.
-    _ops: Box<[RunOp]>,
 }
 
+/// A region to compile: runs of one page, each at its offset in words,
+/// the first the hot one.
 struct Wanted {
-    pa: u64,
+    page: u64,
     gen: u64,
-    ops: Box<[RunOp]>,
-    /// The run's first instruction in the core's runs, as of their epoch
-    /// `epoch`: told where its code is, for the branches linked to it.
+    runs: Vec<(u32, Box<[RunOp]>)>,
+    /// The hot run's first instruction in the core's runs, as of their
+    /// epoch `epoch`: told where its code is, for the branches linked to it.
     first: *const RunOp,
     epoch: u64,
 }
@@ -75,13 +83,16 @@ struct Wanted {
 /// One core's compiled runs.
 pub struct WasmJit {
     slots: Box<[Option<Translation>]>,
-    /// Translations a newer one replaced, which a core may still be about to
-    /// look at: kept, as the code is anyway.
-    old: Vec<Translation>,
+    /// The instructions compiled code refers to, which have to stay put as
+    /// long as it lives, as it does.
+    kept: Vec<Box<[RunOp]>>,
     queue: Vec<Wanted>,
+    decoded: Box<super::predecode::Decoded>,
     /// Entries since the queue's first run went in.
     waited: u32,
     hot: u32,
+    /// Bytes of wasm compiled so far.
+    bytes: usize,
 }
 
 fn slot(pa: u64) -> usize {
@@ -92,10 +103,12 @@ impl WasmJit {
     pub fn new(hot: u32) -> WasmJit {
         WasmJit {
             slots: (0..SLOTS).map(|_| None).collect(),
-            old: Vec::new(),
+            kept: Vec::new(),
             queue: Vec::new(),
+            decoded: Box::new(super::predecode::Decoded::new()),
             waited: 0,
             hot,
+            bytes: 0,
         }
     }
 
@@ -109,10 +122,19 @@ impl WasmJit {
             .then(|| (unsafe { std::mem::transmute::<usize, Code>(t.code) }, t.len))
     }
 
-    /// The run `ops` at `pa` was entered by the interpreter: queue it once it
-    /// has been often enough, and compile the queue once it is full.
+    /// The run `ops` at `pa` was entered by the interpreter: queue its region
+    /// once it has been often enough, and compile the queue once it is full.
+    /// `code` is the run's page's words, from [`crate::mem::SharedRam`].
     #[inline(always)]
-    pub fn entered<M: RunBus>(&mut self, ops: &[RunOp], pa: u64, gen: u64, epoch: u64) {
+    pub fn entered<M: RunBus>(
+        &mut self,
+        ops: &[RunOp],
+        pa: u64,
+        gen: u64,
+        epoch: u64,
+        code: *const u32,
+        entries: &dyn Fn(u64) -> u32,
+    ) {
         let Some(first) = ops.first() else {
             return;
         };
@@ -128,22 +150,72 @@ impl WasmJit {
         }
         first.hits.set(hits + 1);
         if hits + 1 == self.hot {
-            self.want::<M>(ops, pa, gen, epoch);
+            self.want::<M>(ops.as_ptr(), pa, gen, epoch, code, entries);
         }
     }
 
+    /// The run at `pa` and those of its page it branches to, and they to,
+    /// as a region: those of them the core has entered a fair part as often
+    /// as this one, by `entries`.
     #[inline(never)]
-    fn want<M: RunBus>(&mut self, ops: &[RunOp], pa: u64, gen: u64, epoch: u64) {
-        let (n, first) = (ops.len(), ops.as_ptr());
-        let ops = ops
-            .iter()
-            .enumerate()
-            .map(|(i, o)| RunOp::new::<M>(o.op, i + 1 == n))
-            .collect();
+    fn want<M: RunBus>(
+        &mut self,
+        first: *const RunOp,
+        pa: u64,
+        gen: u64,
+        epoch: u64,
+        code: *const u32,
+        entries: &dyn Fn(u64) -> u32,
+    ) {
+        let warm = (self.hot / 8).max(1);
+        let page = pa & !0xFFF;
+        let mut runs: Vec<(u32, Box<[RunOp]>)> = Vec::new();
+        let mut todo = vec![((pa & 0xFFF) >> 2) as u32];
+        while let Some(w) = todo.pop() {
+            if runs.len() >= REGION
+                || runs.iter().any(|r| r.0 == w)
+                || (!runs.is_empty()
+                    && (entries(page | u64::from(w) << 2) < warm
+                        || self.find(page | u64::from(w) << 2, gen).is_some()))
+            {
+                continue;
+            }
+            let mut ops = Vec::new();
+            for at in w..1024 {
+                // Inside the page, which `SharedRam::code_page` handed out.
+                let op = self
+                    .decoded
+                    .get(unsafe { code.add(at as usize).read_unaligned() });
+                let last = op.ends_run() || at == 1023;
+                ops.push(op);
+                if last {
+                    break;
+                }
+            }
+            let n = ops.len();
+            for (i, op) in ops.iter().enumerate() {
+                let here = w + i as u32;
+                if op.plain_branch() && op.kind != Kind::Bl {
+                    let to = i64::from(here) + (op.imm as i64 >> 2);
+                    if (0..1024).contains(&to) {
+                        todo.push(to as u32);
+                    }
+                }
+                if i + 1 == n && op.cond_branch() && here < 1023 {
+                    todo.push(here + 1);
+                }
+            }
+            let ops = ops
+                .into_iter()
+                .enumerate()
+                .map(|(i, op)| RunOp::new::<M>(op, i + 1 == n))
+                .collect();
+            runs.push((w, ops));
+        }
         self.queue.push(Wanted {
-            pa,
+            page: pa & !0xFFF,
             gen,
-            ops,
+            runs,
             first,
             epoch,
         });
@@ -167,8 +239,12 @@ impl WasmJit {
         let table: WebAssembly::Table = wasm_bindgen::function_table().unchecked_into();
         let base = table.grow(queue.len() as u32)?;
         let helpers = Helpers::of::<M>();
-        let bodies: Vec<Vec<u8>> = queue.iter().map(|w| lower(&w.ops, &helpers)).collect();
+        let bodies: Vec<Vec<u8>> = queue.iter().map(|w| lower(&w.runs, &helpers)).collect();
         let bytes = module(base, &bodies);
+        self.bytes += bytes.len();
+        if self.bytes >= BUDGET {
+            self.hot = u32::MAX;
+        }
         let module = WebAssembly::Module::new(&Uint8Array::from(&bytes[..]).into())?;
         let env = Object::new();
         Reflect::set(&env, &"memory".into(), &wasm_bindgen::memory())?;
@@ -182,18 +258,18 @@ impl WasmJit {
                 // since; their page's generation is the link's to check.
                 unsafe { (*w.first).jit.set(base as usize + i) };
             }
-            let t = Translation {
-                pa: w.pa,
-                gen: w.gen,
-                code: base as usize + i,
-                len: w.ops.len() as u64,
-                _ops: w.ops,
-            };
-            if let Some(old) = self.slots[slot(t.pa)].replace(t) {
-                self.old.push(old);
+            for (off, ops) in w.runs {
+                let pa = w.page | u64::from(off) << 2;
+                self.slots[slot(pa)] = Some(Translation {
+                    pa,
+                    gen: w.gen,
+                    code: base as usize + i,
+                    len: ops.len() as u64,
+                });
+                self.kept.push(ops);
+                STATS[0].fetch_add(1, Relaxed);
             }
         }
-        STATS[0].fetch_add(bodies.len() as u64, Relaxed);
         STATS[1].fetch_add(1, Relaxed);
         STATS[2].fetch_add(t.elapsed().as_micros() as u64, Relaxed);
         Ok(())
@@ -357,7 +433,14 @@ const OUT: u32 = 5;
 const PARAMS: u32 = 6;
 
 mod op {
+    pub const UNREACHABLE: u8 = 0x00;
+    pub const BLOCK: u8 = 0x02;
+    pub const LOOP: u8 = 0x03;
     pub const IF: u8 = 0x04;
+    pub const BR: u8 = 0x0C;
+    pub const BR_TABLE: u8 = 0x0E;
+    pub const I64_GE_U: u8 = 0x5A;
+    pub const I32_OR: u8 = 0x72;
     pub const END: u8 = 0x0B;
     pub const RETURN: u8 = 0x0F;
     pub const CALL_INDIRECT: u8 = 0x11;
@@ -414,34 +497,64 @@ enum Held {
     Dirty,
 }
 
-/// Each general register has a local of its own for the whole run, and
-/// `NZCV` the one after them; temporaries come after that.
+/// Each general register has a local of its own for the whole region, and
+/// `NZCV` the one after them; then the region's budget and its page's write
+/// generation, where it is, and the temporaries.
 const REGS: u32 = PARAMS;
 const NZCV: u32 = PARAMS + 31;
-const TEMPS: u32 = PARAMS + 32;
+const UNTIL: u32 = PARAMS + 32;
+const GEN: u32 = PARAMS + 33;
+const GENP: u32 = PARAMS + 34;
+const TEMPS: u32 = PARAMS + 35;
 
 struct Lower<'a> {
     code: Vec<u8>,
     locals: u32,
+    /// Temporaries the instruction at hand has taken.
+    temp: u32,
     regs: [Held; 31],
     /// `NZCV`, packed in the low 32 bits.
     nzcv: Held,
     /// What [`Self::fast_or_slow`] found, for the other path to start from.
     before: Option<[Held; 31]>,
     h: &'a Helpers,
+    /// The region's runs, by their offsets in words, in the order their
+    /// code comes in the function; the run at hand, and its offset.
+    starts: Vec<u32>,
+    run: usize,
+    off: u32,
+    /// The registers and flags the region reads and writes, from a first
+    /// pass over it, which the second loads up front.
+    read: [bool; 32],
+    wrote: [bool; 32],
 }
 
-/// The body of the function for the run `ops`.
-fn lower(ops: &[RunOp], h: &Helpers) -> Vec<u8> {
+/// The body of the function for the region `runs`: a loop round a
+/// `br_table` on the PC's offset in the page, into the code of the run there.
+fn lower(runs: &[(u32, Box<[RunOp]>)], h: &Helpers) -> Vec<u8> {
+    let starts: Vec<u32> = runs.iter().map(|r| r.0).collect();
     let mut l = Lower {
         code: Vec::new(),
         locals: 0,
+        temp: 0,
         regs: [Held::No; 31],
         nzcv: Held::No,
         before: None,
         h,
+        starts,
+        run: 0,
+        off: 0,
+        read: [false; 32],
+        wrote: [false; 32],
     };
-    l.run(ops);
+    l.region(runs);
+    let (read, wrote) = (l.read, l.wrote);
+    l.code.clear();
+    (l.locals, l.temp) = (0, 0);
+    l.read = read;
+    l.wrote = wrote;
+    l.prologue();
+    l.region(runs);
     let mut body = Vec::new();
     leb_u(&mut body, 1);
     leb_u(&mut body, u64::from(TEMPS - PARAMS + l.locals));
@@ -452,39 +565,196 @@ fn lower(ops: &[RunOp], h: &Helpers) -> Vec<u8> {
 }
 
 impl Lower<'_> {
-    fn run(&mut self, ops: &[RunOp]) {
+    /// Load what the region uses, and the budget and generation it checks.
+    fn prologue(&mut self) {
+        for r in 0..31u8 {
+            if self.read[r as usize] || self.wrote[r as usize] {
+                self.load_reg(r);
+            }
+        }
+        if self.read[31] || self.wrote[31] {
+            self.load_nzcv();
+        }
+        for (local, off, wide) in [
+            (UNTIL, offset_of!(Ctx, chain_until), true),
+            (GEN, offset_of!(Ctx, gen), true),
+            (GENP, offset_of!(Ctx, genp), false),
+        ] {
+            self.get_param(CTX);
+            if wide {
+                self.code.extend_from_slice(&[op::I64_LOAD, 3]);
+                leb_u(&mut self.code, off as u64);
+            } else {
+                self.code.extend_from_slice(&[op::I32_LOAD, 2]);
+                leb_u(&mut self.code, off as u64);
+                self.code.push(op::I64_EXTEND_I32_U);
+            }
+            self.code.push(op::LOCAL_SET);
+            leb_u(&mut self.code, local.into());
+        }
+    }
+
+    fn region(&mut self, runs: &[(u32, Box<[RunOp]>)]) {
+        let k = runs.len() as u32;
+        self.code
+            .extend_from_slice(&[op::LOOP, 0x40, op::BLOCK, 0x40]);
+        for _ in 0..k {
+            self.code.extend_from_slice(&[op::BLOCK, 0x40]);
+        }
+        self.get_param(PC0);
+        self.i64(0xFFC);
+        self.code.push(op::I64_AND);
+        let at = self.set();
+        let mut sorted: Vec<(u32, u32)> = (0..k).map(|j| (self.starts[j as usize], j)).collect();
+        sorted.sort_unstable();
+        self.which(at, &sorted, k);
+        self.code.push(op::BR_TABLE);
+        leb_u(&mut self.code, k.into());
+        for j in 0..k {
+            leb_u(&mut self.code, j.into());
+        }
+        leb_u(&mut self.code, k.into());
+        for (j, (off, ops)) in runs.iter().enumerate() {
+            self.code.push(op::END);
+            (self.run, self.off) = (j, *off);
+            self.start_run();
+            self.run_code(ops);
+        }
+        self.code
+            .extend_from_slice(&[op::END, op::UNREACHABLE, op::END]);
+    }
+
+    /// The index of the run of `sorted` (word, index) whose word the byte
+    /// offset `at` is, or `none`, by halves: an `i32` on the stack.
+    fn which(&mut self, at: V, sorted: &[(u32, u32)], none: u32) {
+        if let [(w, j)] = sorted {
+            self.i32(*j as i32);
+            self.i32(none as i32);
+            self.get(at);
+            self.i64(i64::from(*w) << 2);
+            self.code.extend_from_slice(&[op::I64_EQ, op::SELECT]);
+            return;
+        }
+        let (low, high) = sorted.split_at(sorted.len() / 2);
+        self.get(at);
+        self.i64(i64::from(high[0].0) << 2);
+        self.code.extend_from_slice(&[op::I64_LT_U, op::IF, I32]);
+        self.which(at, low, none);
+        self.code.push(op::ELSE);
+        self.which(at, high, none);
+        self.code.push(op::END);
+    }
+
+    /// The registers as a run of the region starts, whichever way it was
+    /// reached: everything the region uses is in its local, and what it
+    /// writes is newer than the core's.
+    fn start_run(&mut self) {
+        let state = |read: bool, wrote: bool| match (read, wrote) {
+            (_, true) => Held::Dirty,
+            (true, false) => Held::Clean,
+            _ => Held::No,
+        };
+        for r in 0..31 {
+            self.regs[r] = state(self.read[r], self.wrote[r]);
+        }
+        self.nzcv = state(self.read[31], self.wrote[31]);
+    }
+
+    /// Bring back into their locals what a handler left the core with, as
+    /// [`Self::start_run`] expects of a branch back into the region.
+    fn reload(&mut self) {
+        for r in 0..31u8 {
+            if self.regs[r as usize] == Held::No
+                && (self.read[r as usize] || self.wrote[r as usize])
+            {
+                self.load_reg(r);
+                self.regs[r as usize] = Held::Clean;
+            }
+        }
+        if self.nzcv == Held::No && (self.read[31] || self.wrote[31]) {
+            self.load_nzcv();
+            self.nzcv = Held::Clean;
+        }
+    }
+
+    /// After the branch `at`, the run's instruction `i`, to `target`: on
+    /// into the region's run there if it has one at word `to` and the
+    /// budget and the page allow, else out as [`Self::exit`] goes. `nest` is
+    /// how many blocks deeper than the run's code this is.
+    fn branch(&mut self, at: i32, i: usize, target: V, to: i64, nest: u32) {
+        let inside = (0..1024).contains(&to) && self.starts.contains(&(to as u32));
+        if !inside {
+            return self.exit(at, i, target);
+        }
+        self.reload();
+        self.cycle(i + 1);
+        let c = self.set();
+        self.get(c);
+        self.get(V(UNTIL));
+        self.code.push(op::I64_GE_U);
+        self.get(V(GENP));
+        self.code
+            .extend_from_slice(&[op::I32_WRAP_I64, op::I64_LOAD, 3, 0]);
+        self.get(V(GEN));
+        self.code
+            .extend_from_slice(&[op::I64_NE, op::I32_OR, op::IF, 0x40]);
+        self.exit(at, i, target);
+        self.code.push(op::END);
+        self.get(target);
+        self.code.push(op::LOCAL_SET);
+        leb_u(&mut self.code, PC0.into());
+        self.get(c);
+        self.code.push(op::LOCAL_SET);
+        leb_u(&mut self.code, C0.into());
+        self.code.push(op::BR);
+        let depth = self.starts.len() as u32 - self.run as u32 + nest;
+        leb_u(&mut self.code, depth.into());
+    }
+
+    /// The word a branch at the run's instruction `i` goes to with `imm`.
+    fn word(&self, i: usize, imm: u64) -> i64 {
+        i64::from(self.off) + i as i64 + (imm as i64 >> 2)
+    }
+
+    fn run_code(&mut self, ops: &[RunOp]) {
         for (i, o) in ops.iter().enumerate() {
+            self.temp = 0;
             let op = &o.op;
             let at = o as *const RunOp as usize as i32;
             if i + 1 == ops.len() && op.plain_branch() {
-                // Back to the run loop with the target, which may be
-                // compiled too, rather than on through the interpreter's
-                // links, which are not.
-                let next = if op.kind == Kind::B || op.kind == Kind::Bl {
-                    if op.kind == Kind::Bl {
-                        self.pc(i);
-                        self.i64(4);
-                        self.code.push(op::I64_ADD);
-                        let lr = self.set();
-                        self.set_reg(30, lr);
-                    }
+                // On in the region, or into the next compiled code, rather
+                // than through the interpreter's links, which go to neither.
+                if op.kind == Kind::Bl {
                     self.pc(i);
-                    self.i64(op.imm as i64);
+                    self.i64(4);
                     self.code.push(op::I64_ADD);
-                    self.set()
-                } else {
+                    let lr = self.set();
+                    self.set_reg(30, lr);
+                }
+                self.pc(i);
+                self.i64(op.imm as i64);
+                self.code.push(op::I64_ADD);
+                let away = self.set();
+                let to = self.word(i, op.imm);
+                if op.kind != Kind::B && op.kind != Kind::Bl {
                     let t = self.branch_taken(op);
-                    self.pc(i);
-                    self.i64(op.imm as i64);
-                    self.code.push(op::I64_ADD);
-                    let away = self.set();
+                    let regs = self.regs;
+                    let nzcv = self.nzcv;
+                    self.get(t);
+                    self.code
+                        .extend_from_slice(&[op::I32_WRAP_I64, op::IF, 0x40]);
+                    self.branch(at, i, away, to, 1);
+                    self.code.push(op::END);
+                    (self.regs, self.nzcv) = (regs, nzcv);
                     self.pc(i);
                     self.i64(4);
                     self.code.push(op::I64_ADD);
                     let on = self.set();
-                    self.select(t, away, on)
-                };
-                self.exit(at, i, next);
+                    let on_word = i64::from(self.off) + i as i64 + 1;
+                    self.branch(at, i, on, on_word, 0);
+                } else {
+                    self.branch(at, i, away, to, 0);
+                }
                 STATS_INLINE.fetch_add(1, Relaxed);
                 return;
             }
@@ -504,16 +774,18 @@ impl Lower<'_> {
             }
             if op.cond_branch() {
                 let t = self.branch_taken(op);
-                self.get(t);
                 self.pc(i);
                 self.i64(op.imm as i64);
                 self.code.push(op::I64_ADD);
                 let target = self.set();
+                let to = self.word(i, op.imm);
+                let (regs, nzcv) = (self.regs, self.nzcv);
                 self.get(t);
                 self.code
                     .extend_from_slice(&[op::I32_WRAP_I64, op::IF, 0x40]);
-                self.exit(at, i, target);
+                self.branch(at, i, target, to, 1);
                 self.code.push(op::END);
+                (self.regs, self.nzcv) = (regs, nzcv);
                 STATS_INLINE.fetch_add(1, Relaxed);
                 continue;
             }
@@ -585,9 +857,13 @@ impl Lower<'_> {
 
     // ---- emitting -------------------------------------------------------------
 
+    /// A temporary, alive until the next instruction: they are taken
+    /// afresh for each, as a function's locals are all cleared every time
+    /// it is called.
     fn local(&mut self) -> V {
-        let v = V(TEMPS + self.locals);
-        self.locals += 1;
+        let v = V(TEMPS + self.temp);
+        self.temp += 1;
+        self.locals = self.locals.max(self.temp);
         v
     }
 
@@ -712,6 +988,7 @@ impl Lower<'_> {
 
     /// `Xr`'s value as it is now, in a temporary of its own.
     fn reg(&mut self, r: u8) -> V {
+        self.read[r as usize] = true;
         if self.regs[r as usize] == Held::No {
             self.load_reg(r);
             self.regs[r as usize] = Held::Clean;
@@ -725,6 +1002,7 @@ impl Lower<'_> {
         self.code.push(op::LOCAL_SET);
         leb_u(&mut self.code, u64::from(REGS + u32::from(r)));
         self.regs[r as usize] = Held::Dirty;
+        self.wrote[r as usize] = true;
     }
 
     /// `Xr`/`Wr`, XZR for 31.
@@ -743,14 +1021,19 @@ impl Lower<'_> {
         }
     }
 
+    fn load_nzcv(&mut self) {
+        self.get_param(CPU);
+        self.code.extend_from_slice(&[op::I32_LOAD, 2]);
+        leb_u(&mut self.code, offset_of!(Cpu, nzcv) as u64);
+        self.code
+            .extend_from_slice(&[op::I64_EXTEND_I32_U, op::LOCAL_SET]);
+        leb_u(&mut self.code, NZCV.into());
+    }
+
     fn get_nzcv(&mut self) -> V {
+        self.read[31] = true;
         if self.nzcv == Held::No {
-            self.get_param(CPU);
-            self.code.extend_from_slice(&[op::I32_LOAD, 2]);
-            leb_u(&mut self.code, offset_of!(Cpu, nzcv) as u64);
-            self.code
-                .extend_from_slice(&[op::I64_EXTEND_I32_U, op::LOCAL_SET]);
-            leb_u(&mut self.code, NZCV.into());
+            self.load_nzcv();
             self.nzcv = Held::Clean;
         }
         self.get(V(NZCV));
@@ -762,6 +1045,7 @@ impl Lower<'_> {
         self.code.push(op::LOCAL_SET);
         leb_u(&mut self.code, NZCV.into());
         self.nzcv = Held::Dirty;
+        self.wrote[31] = true;
     }
 
     /// Write back what is newer than the core's, leaving the cache as it is
@@ -1103,6 +1387,36 @@ impl Lower<'_> {
                 let r = self.select(holds, nzcv, other);
                 self.set_nzcv(r);
             }
+            Kind::Bitfield => {
+                let insn = op.insn;
+                let sf = insn >> 31 != 0;
+                let src = self.xr(b, sf);
+                let rotated = self.shift_reg(src, 3, u32::from(c), sf);
+                let bot = self.bin_imm(self::op::I64_AND, rotated, op.imm as i64);
+                let tmask = op.imm2 as i64;
+                let r = match (insn >> 29) & 3 {
+                    0 => {
+                        let bit =
+                            self.bin_imm(self::op::I64_SHR_U, src, i64::from((insn >> 10) & 63));
+                        let bit = self.bin_imm(self::op::I64_AND, bit, 1);
+                        let zero = self.imm(0);
+                        let top = self.bin(self::op::I64_SUB, zero, bit);
+                        let top = self.bin_imm(self::op::I64_AND, top, !tmask);
+                        let bot = self.bin_imm(self::op::I64_AND, bot, tmask);
+                        self.bin(self::op::I64_OR, top, bot)
+                    }
+                    1 => {
+                        let dst = self.xr(a, sf);
+                        let kept = self.bin_imm(self::op::I64_AND, dst, !(op.imm as i64));
+                        let bot = self.bin(self::op::I64_OR, kept, bot);
+                        let bot = self.bin_imm(self::op::I64_AND, bot, tmask);
+                        let top = self.bin_imm(self::op::I64_AND, dst, !tmask);
+                        self.bin(self::op::I64_OR, top, bot)
+                    }
+                    _ => self.bin_imm(self::op::I64_AND, bot, tmask),
+                };
+                self.set_xr(a, sf, r);
+            }
             Kind::Adr => {
                 self.pc(i);
                 self.i64(op.imm as i64);
@@ -1382,6 +1696,46 @@ impl Lower<'_> {
                     }
                     None => {
                         let v = self.load_n(n, 0);
+                        self.put_reg(a, v);
+                    }
+                }
+                let writes = [a];
+                self.join(op, at, i, if store { &[] } else { &writes });
+            }
+            Kind::LdStRegOff => {
+                let f = op.imm as u32;
+                let (scale, access, option, shift) = (f & 3, (f >> 2) & 3, (f >> 4) & 7, f >> 7);
+                let n = 1u32 << scale;
+                let index = self.xr(cc, true);
+                let len = 8u32 << (option & 3);
+                let index = if option & 4 != 0 {
+                    self.sext(index, len)
+                } else if len < 64 {
+                    self.bin_imm(self::op::I64_AND, index, (1i64 << len) - 1)
+                } else {
+                    index
+                };
+                let index = self.bin_imm(self::op::I64_SHL, index, i64::from(shift));
+                let base = self.xsp(b);
+                let va = self.bin(self::op::I64_ADD, base, index);
+                let store = access == 0;
+                let v = store.then(|| self.xr(a, true));
+                let (ok, entry) = self.probe(va, n, store);
+                self.fast_or_slow(ok);
+                self.host(entry, va);
+                match v {
+                    Some(v) => {
+                        self.store_n(v, n, 0);
+                        self.bump(entry);
+                    }
+                    None => {
+                        let mut v = self.load_n(n, 0);
+                        if access >= 2 {
+                            v = self.sext(v, 8 * n);
+                            if access == 3 {
+                                v = self.mask(v, false);
+                            }
+                        }
                         self.put_reg(a, v);
                     }
                 }

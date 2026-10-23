@@ -147,6 +147,19 @@ impl<M: RunBus> Runs<M> {
         self.decode(i, pa, code, genp, decoded)
     }
 
+    /// How often the run at `pa` was entered, if it is decoded from its
+    /// page as it is now: 0 if it is not.
+    #[cfg(pimu_compiled)]
+    pub fn hits(&self, pa: u64, genp: *const u64) -> u32 {
+        let gen = unsafe { *genp };
+        let i = (((pa >> 1) ^ (pa >> 18)) as usize) & ((1 << SLOTS_LOG2) - 2);
+        [i, i ^ 1]
+            .into_iter()
+            .map(|i| self.slots[i])
+            .find(|s| s.pa == pa && s.genp == genp && gen == s.gen)
+            .map_or(0, |s| self.ops[s.start as usize].hits())
+    }
+
     #[inline(never)]
     fn decode(
         &mut self,
