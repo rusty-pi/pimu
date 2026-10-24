@@ -531,7 +531,7 @@ impl Disk {
         for lba in first..=last {
             self.written.insert(lba, Box::new([0; BLOCK_SIZE]));
         }
-        const ZEROS: [u8; 64 * BLOCK_SIZE] = [0; 64 * BLOCK_SIZE];
+        static ZEROS: [u8; 64 * BLOCK_SIZE] = [0; 64 * BLOCK_SIZE];
         let mut lba = first;
         while lba <= last {
             let n = (last - lba + 1).min(64);

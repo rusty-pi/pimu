@@ -531,8 +531,10 @@ test.describe("a snapshot at the ARM's release", () => {
     await expect(app.page.locator("#toast")).toHaveText(/^Snapshot kept/);
     await app.powerButton.click();
     await app.powerOn();
-    const workers = await app.workers();
-    const second = workers.at(-1).sent.find((m) => m.type === "power-on");
+    const powerOnOf = async () => (await app.workers()).at(-1).sent.find((m) => m.type === "power-on");
+    // Sent once the page has looked the snapshot up, which takes a moment.
+    await expect.poll(powerOnOf).toBeDefined();
+    const second = await powerOnOf();
     expect(second.snapshotKey).toBe(first.snapshotKey);
     expect(second.snapshot).toBeDefined();
     expect(second.options.snapshot).toBeUndefined();
