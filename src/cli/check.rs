@@ -1,6 +1,10 @@
 //! `boot --scenario`: boot what a scenario file describes and check the run
 //! against it — the golden console transcript, every milestone and the retired
 //! counts. A directory runs every `*.yaml` in it, one after another.
+//!
+//! The same scenario can be run on a real board (`--on`) or checked against a
+//! UART capture from one (`--from-capture`); either is judged by the milestones
+//! alone (`hardware.rs`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,12 +17,17 @@ use anyhow::{bail, Context, Result};
 use pimu::harness;
 use pimu::harness::boot::{GoldenCheck, RetiredCounts};
 
+use crate::hardware;
+
 /// What `--scenario` and the options that only mean something with it ask for.
 pub struct Flags {
     path: PathBuf,
     record: bool,
     plan: bool,
     from_log: Option<PathBuf>,
+    from_capture: Option<PathBuf>,
+    on: Option<String>,
+    devices: Option<PathBuf>,
     output: Option<PathBuf>,
 }
 
@@ -31,6 +40,9 @@ pub fn split(args: &[String]) -> Result<Option<(Flags, Vec<String>)>> {
         record: false,
         plan: false,
         from_log: None,
+        from_capture: None,
+        on: None,
+        devices: None,
         output: None,
     };
     let mut rest = Vec::with_capacity(args.len());
@@ -46,6 +58,15 @@ pub fn split(args: &[String]) -> Result<Option<(Flags, Vec<String>)>> {
             "--record" => flags.record = true,
             "--plan" => flags.plan = true,
             "--from-log" => flags.from_log = Some(value("--from-log")?),
+            "--from-capture" => flags.from_capture = Some(value("--from-capture")?),
+            "--devices" => flags.devices = Some(value("--devices")?),
+            "--on" => {
+                flags.on = Some(
+                    it.next()
+                        .cloned()
+                        .context("--on needs a device name from devices.yaml")?,
+                )
+            }
             "--output" => flags.output = Some(value("--output")?),
             _ => rest.push(a.clone()),
         }
@@ -55,6 +76,9 @@ pub fn split(args: &[String]) -> Result<Option<(Flags, Vec<String>)>> {
             (flags.record, "--record"),
             (flags.plan, "--plan"),
             (flags.from_log.is_some(), "--from-log"),
+            (flags.from_capture.is_some(), "--from-capture"),
+            (flags.on.is_some(), "--on"),
+            (flags.devices.is_some(), "--devices"),
             (flags.output.is_some(), "--output"),
         ] {
             if given {
@@ -67,7 +91,27 @@ pub fn split(args: &[String]) -> Result<Option<(Flags, Vec<String>)>> {
     if flags.from_log.is_some() && (flags.plan || flags.output.is_some()) {
         bail!("--from-log checks an earlier run: it takes no --plan or --output");
     }
+    if flags.on.is_some() && (flags.from_log.is_some() || flags.from_capture.is_some()) {
+        bail!("--on boots a real board: it cannot also check a log or a capture");
+    }
+    if flags.from_capture.is_some()
+        && (flags.from_log.is_some() || flags.plan || flags.output.is_some())
+    {
+        bail!("--from-capture checks a board's UART capture: it takes no --from-log, --plan or --output");
+    }
+    if flags.devices.is_some() && flags.on.is_none() {
+        bail!("--devices goes with --on");
+    }
+    if flags.record && (flags.on.is_some() || flags.from_capture.is_some()) {
+        bail!("--record writes the model's golden: a real board's run is not one");
+    }
     Ok(Some((flags, rest)))
+}
+
+/// Whether `arg` is `--max-wall` or the seconds it takes.
+fn is_wall_option(extras: &[String], arg: &String) -> bool {
+    let at = extras.iter().position(|a| std::ptr::eq(a, arg));
+    arg == "--max-wall" || at.is_some_and(|i| i > 0 && extras[i - 1] == "--max-wall")
 }
 
 fn wall_override(extras: &[String]) -> Result<Option<u64>> {
@@ -103,7 +147,22 @@ pub fn run(flags: &Flags, extras: &[String]) -> Result<ExitCode> {
     let files = scenario_files(&flags.path)?;
     let several = flags.path.is_dir();
     let wall = wall_override(extras)?;
+    let hardware = flags.on.is_some() || flags.from_capture.is_some();
+    if hardware {
+        if let Some(other) = extras.iter().find(|a| !is_wall_option(extras, a)) {
+            bail!("{other}: a real board takes no boot options, only --max-wall");
+        }
+    }
+    if flags.from_capture.is_some() && several {
+        bail!("--from-capture checks one capture: name one scenario, not a folder");
+    }
+    let device = flags
+        .on
+        .as_deref()
+        .map(|name| hardware::load(flags.devices.as_deref(), name))
+        .transpose()?;
     let mut results: Vec<(String, bool)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     for file in &files {
         let mut scn = harness::BootScenario::load(file)?;
         if let Some(secs) = wall {
@@ -112,22 +171,37 @@ pub fn run(flags: &Flags, extras: &[String]) -> Result<ExitCode> {
         if several {
             println!("== {} ({})", scn.name, file.display());
         }
-        let passed = run_one(flags, &scn, extras, several)? == ExitCode::SUCCESS;
-        results.push((scn.name.clone(), passed));
+        let outcome = match &device {
+            Some(device) => run_on(flags, &scn, device, several)?,
+            None => Some(run_one(flags, &scn, extras, several)?),
+        };
+        match outcome {
+            Some(code) => results.push((scn.name.clone(), code == ExitCode::SUCCESS)),
+            None => skipped.push(scn.name.clone()),
+        }
     }
     if !several || flags.plan {
-        return Ok(if results.iter().all(|(_, ok)| *ok) {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        });
+        return Ok(
+            if !results.is_empty() && results.iter().all(|(_, ok)| *ok) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            },
+        );
     }
     println!();
     for (name, ok) in &results {
         println!("{} {name}", if *ok { "PASS" } else { "FAIL" });
     }
+    for name in &skipped {
+        println!("SKIP {name}");
+    }
     let failed = results.iter().filter(|(_, ok)| !ok).count();
-    println!("{} scenario(s), {failed} failed", results.len());
+    println!(
+        "{} scenario(s), {failed} failed, {} skipped",
+        results.len() + skipped.len(),
+        skipped.len()
+    );
     Ok(if failed == 0 {
         ExitCode::SUCCESS
     } else {
@@ -156,6 +230,9 @@ fn run_one(
     extras: &[String],
     several: bool,
 ) -> Result<ExitCode> {
+    if let Some(capture) = &flags.from_capture {
+        return check_capture(scn, capture);
+    }
     let log = log_path(flags, scn, several);
     if several {
         if let Some(dir) = log.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -167,7 +244,7 @@ fn run_one(
     let console = PathBuf::from(console);
 
     if flags.from_log.is_none() {
-        if !inputs_present(scn) {
+        if !inputs_present(scn, false) {
             return Ok(ExitCode::FAILURE);
         }
         let mut staged = scn.clone();
@@ -188,9 +265,81 @@ fn run_one(
     check_boot(scn, &log, &console, flags.record)
 }
 
+/// Run `scn` on the real board `device`. `None` when the scenario asks for
+/// something a board cannot be given, after saying what.
+fn run_on(
+    flags: &Flags,
+    scn: &harness::BootScenario,
+    device: &hardware::Device,
+    several: bool,
+) -> Result<Option<ExitCode>> {
+    let why = hardware::unsuitable(scn, device);
+    if !why.is_empty() {
+        eprintln!("{}: skipped, it cannot run on this board:", scn.name);
+        for w in &why {
+            eprintln!("  {w}");
+        }
+        return Ok(None);
+    }
+    if !inputs_present(scn, true) {
+        return Ok(Some(ExitCode::FAILURE));
+    }
+    let log = log_path(flags, scn, several);
+    if let Some(dir) = log.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let mut cards = log.clone().into_os_string();
+    cards.push(".cards");
+    if flags.plan {
+        println!("wall={}", scn.wall_secs());
+        println!("stage into {}", device.tftp_dir.display());
+        println!("power_cycle {}", device.power_cycle.join(" "));
+        println!("read {} at {} baud", device.serial.display(), device.baud);
+        return Ok(Some(ExitCode::SUCCESS));
+    }
+    let copied = hardware::stage(scn, device, Path::new(&cards))?;
+    println!("staged {copied} file(s) in {}", device.tftp_dir.display());
+    hardware::capture(
+        device,
+        scn.boot.until.as_deref(),
+        Duration::from_secs(scn.wall_secs()),
+        &log,
+    )?;
+    println!();
+    check_capture(scn, &log).map(Some)
+}
+
+/// Check a UART capture from a real board against the milestones. The model's
+/// own lines are left out, and so are the golden transcript and the retired
+/// counts: serial numbers, SDRAM training and instruction counts are the
+/// board's.
+fn check_capture(scn: &harness::BootScenario, capture: &Path) -> Result<ExitCode> {
+    let bytes = std::fs::read(capture)
+        .with_context(|| format!("reading the capture {}", capture.display()))?;
+    let failures = harness::boot::check_capture(scn, &bytes);
+    let left_out = scn.milestones.iter().filter(|m| m.model_only).count();
+    println!(
+        "{}: {} milestone(s) on the board's UART ({left_out} model-only left out)",
+        scn.name,
+        scn.milestones.len() - left_out
+    );
+    if failures.is_empty() {
+        println!("board check passed");
+        return Ok(ExitCode::SUCCESS);
+    }
+    for f in &failures {
+        eprintln!("{f}");
+    }
+    eprintln!("board check FAILED ({} problem(s))", failures.len());
+    Ok(ExitCode::FAILURE)
+}
+
 /// Name the files the run needs and does not have, with the command that makes each.
-fn inputs_present(scn: &harness::BootScenario) -> bool {
-    let missing = scn.missing_inputs();
+fn inputs_present(scn: &harness::BootScenario, on_board: bool) -> bool {
+    let mut missing = scn.missing_inputs();
+    if on_board {
+        missing.retain(|i| i.path != scn.eeprom_path());
+    }
     if missing.is_empty() {
         return true;
     }
@@ -433,6 +582,9 @@ mod tests {
             record: false,
             plan: false,
             from_log: None,
+            from_capture: None,
+            on: None,
+            devices: None,
             output: output.map(PathBuf::from),
         };
         assert_eq!(
