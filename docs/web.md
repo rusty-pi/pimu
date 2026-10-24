@@ -139,8 +139,12 @@ applied to the served files as well.
 An image is read as the guest asks for blocks, in 1 MiB pieces, like a `--sd
 <url>` of the command line: a local file through `FileReaderSync`, a URL through
 ranged requests (so the server has to answer `Range` and allow it cross-origin,
-and tell the length). What the guest writes stays in memory. `xz`-compressed
-images have to be decompressed first.
+and tell the length). What the guest writes stays in memory, unless **Keep what
+the guest writes** is on: then the blocks written go to the origin's private
+file system (OPFS) with a bitmap of which they are (`web/kept.mjs`), and the
+next power-on of the same image reads them back over it, as a real card's second
+boot would. The image itself is never written; **Forget what it wrote** drops
+them. `xz`-compressed images have to be decompressed first.
 
 ## How it is built
 

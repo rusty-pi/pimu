@@ -13,6 +13,8 @@ use crate::periph::disk::ByteSource;
 pub struct JsSource {
     object: JsValue,
     read: Function,
+    /// `write(offset, bytes)`, where the page keeps what the guest writes.
+    write: Option<Function>,
     len: u64,
 }
 
@@ -30,9 +32,13 @@ impl JsSource {
             .map_err(describe)?
             .dyn_into::<Function>()
             .map_err(|_| anyhow!("the image has no read()"))?;
+        let write = Reflect::get(&object, &"write".into())
+            .ok()
+            .and_then(|f| f.dyn_into::<Function>().ok());
         Ok(JsSource {
             object,
             read,
+            write,
             len: size as u64,
         })
     }
@@ -62,5 +68,13 @@ impl ByteSource for JsSource {
         }
         bytes.copy_to(out);
         Ok(())
+    }
+
+    fn write_at(&self, at: u64, data: &[u8]) {
+        if let Some(write) = &self.write {
+            // A copy: the page may not hand shared memory to its storage.
+            let bytes = Uint8Array::from(data);
+            let _ = write.call2(&self.object, &(at as f64).into(), &bytes);
+        }
     }
 }

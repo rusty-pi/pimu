@@ -192,6 +192,30 @@ test("a disk image is read in ranges, from a file or from a URL", async ({ talk 
   expect(io.usb).toEqual({ read: 12, requests: 2 });
 });
 
+test("a kept card reads back at the next power-on what the last one wrote", async ({ talk, page }) => {
+  const origin = await talk.origin();
+  const sd = { url: `${origin}/tests/data/disk.img`, keep: true };
+  const powerOn = async (options) => {
+    await talk.post(request(origin, { options: { stepping: "c0", ticks: 3, ...options }, images: { sd } }));
+    await talk.until("(m) => m.type === 'phase' && m.phase === 'running'");
+    return (await talk.stubCalls()).find((c) => c[0] === "attach_image");
+  };
+  expect((await powerOn({ scribble: true }))[3]).toEqual(Array(8).fill(0x5a));
+  await page.evaluate(() => {
+    window.__worker.terminate();
+    window.__log = [];
+    window.startWorker();
+  });
+  expect((await powerOn({}))[3]).toEqual(Array(8).fill(0x5a));
+  await page.evaluate(() => {
+    window.__worker.terminate();
+    window.__log = [];
+    window.startWorker();
+  });
+  await page.evaluate(async (url) => (await import("/kept.mjs")).forgetKept(`url:${url}`), sd.url);
+  expect((await powerOn({}))[3]).toEqual([0, 0, 0, 0, 1, 0, 0, 0]);
+});
+
 test("a compressed image is refused with the reason", async ({ talk }) => {
   const origin = await talk.origin();
   await talk.post(request(origin, { images: { sd: { url: `${origin}/tests/data/image.img.xz` } } }));

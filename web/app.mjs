@@ -5,6 +5,7 @@
 import "./coi.mjs";
 import { download } from "./download.mjs";
 import { ThreadPool, canHaveThreads } from "./threads.mjs";
+import { forgetKept, keptKey } from "./kept.mjs";
 import { netBootOrder } from "./netboot.mjs";
 import { getSnapshot, putSnapshot, snapshotKey } from "./snapshots.mjs";
 import {
@@ -302,12 +303,13 @@ async function eepromBytes() {
 }
 
 function imageDescriptor(spec, file, what) {
+  const keep = Boolean(spec.keep) || undefined;
   if (spec.kind === "file") {
     if (!file) throw new Error(`${what}: no file picked`);
-    return { file };
+    return { file, keep };
   }
   if (!spec.url.trim()) throw new Error(`${what}: no URL given`);
-  return { url: spec.url.trim() };
+  return { url: spec.url.trim(), keep };
 }
 
 function bootSource(spec, picked, what) {
@@ -1016,7 +1018,20 @@ function imagePicker(slot, spec, what) {
     spec.kind === "file"
       ? h("div", { class: "field" }, filePicker(`Choose ${what}…`, { accept: ".img,.iso,.bin,.raw", onPick: ([f]) => { files[slot === "sd" ? "sdImage" : slot] = f; renderDrawer(); }, current: file ? `${file.name} (${mib(file.size)})` : "nothing chosen" }))
       : h("div", { class: "field" }, h("input", { type: "url", placeholder: "https://example.org/disk.img", value: spec.url, "aria-label": `${what} URL`, oninput: (e) => { spec.url = e.target.value; changed(); } })),
-    h("p", { class: "help hint" }, "Read in pieces as the guest asks for blocks – never loaded whole. What the guest writes stays in memory. A URL needs a server that allows cross-origin Range requests. xz-compressed images must be decompressed first."));
+    checkbox("Keep what the guest writes, in this browser", Boolean(spec.keep), (v) => (spec.keep = v),
+      "The next power-on finds the card as the last one left it, as a real card would be. The image itself is never changed."),
+    h("div", { class: "row" },
+      h("button", { class: "small", disabled: powered(), onclick: () => forgetWrites(spec, file, what) }, "Forget what it wrote")),
+    h("p", { class: "help hint" }, "Read in pieces as the guest asks for blocks – never loaded whole. What the guest writes stays in memory unless kept. A URL needs a server that allows cross-origin Range requests. xz-compressed images must be decompressed first."));
+}
+
+async function forgetWrites(spec, file, what) {
+  try {
+    await forgetKept(keptKey(imageDescriptor(spec, file, what)));
+    toast(`${what}: back to the image as it is`);
+  } catch (e) {
+    toast(e.message ?? String(e), true);
+  }
 }
 
 function netServes() {

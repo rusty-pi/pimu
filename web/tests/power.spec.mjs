@@ -137,6 +137,25 @@ test.describe("powering on", () => {
     expect(request.options).not.toHaveProperty("cmdline");
   });
 
+  test("a card image can keep what the guest writes", async ({ app }) => {
+    await app.open("sd");
+    await app.drawer.getByRole("radio", { name: /A disk image/ }).check();
+    await app.drawer.getByRole("radio", { name: "URL" }).check();
+    await app.drawer.getByLabel("a card image URL").fill("https://example.org/card.img");
+    await app.drawer.getByRole("checkbox", { name: /Keep what the guest writes/ }).check();
+    await app.powerOn();
+    expect((await app.request()).images).toEqual({ sd: { url: "https://example.org/card.img", keep: true } });
+  });
+
+  test("what a kept card wrote can be forgotten", async ({ app }) => {
+    await app.open("sd");
+    await app.drawer.getByRole("radio", { name: /A disk image/ }).check();
+    await app.drawer.getByRole("radio", { name: "URL" }).check();
+    await app.drawer.getByLabel("a card image URL").fill("https://example.org/card.img");
+    await app.drawer.getByRole("button", { name: "Forget what it wrote" }).click();
+    await expect(app.page.locator("#toast")).toHaveText(/back to the image as it is/);
+  });
+
   test("a GitHub directory is listed by the worker", async ({ app }) => {
     await app.open("sd");
     await app.drawer.getByRole("radio", { name: /GitHub directory/ }).check();
@@ -521,8 +540,10 @@ test.describe("a snapshot at the ARM's release", () => {
     await expect(app.page.locator("#toast")).toHaveText(/^Snapshot kept/);
     await app.powerButton.click();
     await app.powerOn();
-    const workers = await app.workers();
-    const second = workers.at(-1).sent.find((m) => m.type === "power-on");
+    const powerOnOf = async () => (await app.workers()).at(-1).sent.find((m) => m.type === "power-on");
+    // Sent once the page has looked the snapshot up, which takes a moment.
+    await expect.poll(powerOnOf).toBeDefined();
+    const second = await powerOnOf();
     expect(second.snapshotKey).toBe(first.snapshotKey);
     expect(second.snapshot).toBeDefined();
     expect(second.options.snapshot).toBeUndefined();
