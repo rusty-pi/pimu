@@ -137,6 +137,16 @@ test.describe("powering on", () => {
     expect(request.options).not.toHaveProperty("cmdline");
   });
 
+  test("a card image can keep what the guest writes", async ({ app }) => {
+    await app.open("sd");
+    await app.drawer.getByRole("radio", { name: /A disk image/ }).check();
+    await app.drawer.getByRole("radio", { name: "URL" }).check();
+    await app.drawer.getByLabel("a card image URL").fill("https://example.org/card.img");
+    await app.drawer.getByRole("checkbox", { name: /Keep what the guest writes/ }).check();
+    await app.powerOn();
+    expect((await app.request()).images).toEqual({ sd: { url: "https://example.org/card.img", keep: true } });
+  });
+
   test("a GitHub directory is listed by the worker", async ({ app }) => {
     await app.open("sd");
     await app.drawer.getByRole("radio", { name: /GitHub directory/ }).check();

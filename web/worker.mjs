@@ -4,6 +4,7 @@
 
 import init, { BootImage, PiBuilder, eeprom_bootconf } from "./pkg/pimu.js";
 import { download as fetchWithProgress, githubListing } from "./download.mjs";
+import { keptImage, keptKey, openKept } from "./kept.mjs";
 import { withCardEdits } from "./netboot.mjs";
 import { signImage } from "./signing.mjs";
 import { loadThreaded } from "./threads.mjs";
@@ -81,6 +82,7 @@ function counted(slot, image) {
       stats[slot].requests += 1;
       return bytes;
     },
+    write: image.write && ((offset, bytes) => image.write(offset, bytes)),
   };
 }
 
@@ -187,7 +189,9 @@ async function powerOn(request) {
   if (extras.hat) builder.set_hat(extras.hat);
   if (extras.edid) builder.set_edid(extras.edid);
   for (const [slot, descriptor] of Object.entries(request.images)) {
-    builder.attach_image(slot, counted(slot, imageOf(descriptor)));
+    let image = imageOf(descriptor);
+    if (descriptor.keep) image = keptImage(image, await openKept(keptKey(descriptor)));
+    builder.attach_image(slot, counted(slot, image));
   }
   if (request.snapshot) {
     builder.set_snapshot(new Uint8Array(request.snapshot));

@@ -31,6 +31,8 @@ export class PiBuilder {
   set_hat(bytes) { record("set_hat", bytes.length); }
   set_edid(bytes) { record("set_edid", bytes.length); }
   attach_image(slot, image) {
+    // `scribble`: the guest writes a block at the start of every image.
+    if (this.options.scribble) image.write?.(0, new Uint8Array(512).fill(0x5a));
     const head = Array.from(image.read(0, 8));
     const tail = Array.from(image.read(image.size - 4, 4));
     record("attach_image", slot, image.size, head, tail);

@@ -108,6 +108,10 @@ pub trait ByteSource {
     fn size(&self) -> u64;
 
     fn read_at(&self, at: u64, out: &mut [u8]) -> Result<()>;
+
+    /// Keep `data`, written at `at`, where the next run will read it: a card
+    /// the page keeps across power-ons. Most sources keep nothing.
+    fn write_at(&self, _at: u64, _data: &[u8]) {}
 }
 
 /// Chunks of a [`ByteSource`] image kept at once: 64 MiB.
@@ -510,14 +514,29 @@ impl Disk {
         for (i, block) in data.as_chunks::<BLOCK_SIZE>().0.iter().enumerate() {
             self.written.insert(lba + i as u64, Box::new(*block));
         }
+        self.keep(lba, &data[..count as usize * BLOCK_SIZE]);
         self.log("write", lba, count);
         true
+    }
+
+    /// Hand blocks just written to a source that keeps them past this run.
+    fn keep(&self, lba: u64, data: &[u8]) {
+        if let Backing::Source { source, .. } = &*self.backing {
+            source.write_at(lba * BLOCK_SIZE as u64, data);
+        }
     }
 
     pub fn zero(&mut self, first: u64, last: u64) {
         let last = last.min(self.blocks.saturating_sub(1));
         for lba in first..=last {
             self.written.insert(lba, Box::new([0; BLOCK_SIZE]));
+        }
+        const ZEROS: [u8; 64 * BLOCK_SIZE] = [0; 64 * BLOCK_SIZE];
+        let mut lba = first;
+        while lba <= last {
+            let n = (last - lba + 1).min(64);
+            self.keep(lba, &ZEROS[..n as usize * BLOCK_SIZE]);
+            lba += n;
         }
         if first <= last {
             self.log("erase", first, last - first + 1);
@@ -577,6 +596,39 @@ mod tests {
         assert!(d.write(5, &[0x55; BLOCK_SIZE]));
         assert!(d.read_block(5, &mut b) && b[0] == 0x55);
         assert_eq!(d.blocks(), 3 * CHUNK / BLOCK_SIZE as u64);
+    }
+
+    /// What the guest writes or erases goes on to a source that keeps it.
+    #[test]
+    fn writes_reach_a_source_that_keeps_them() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Keeping(Rc<RefCell<Vec<(u64, usize, u8)>>>);
+        impl ByteSource for Keeping {
+            fn size(&self) -> u64 {
+                CHUNK
+            }
+            fn read_at(&self, _: u64, out: &mut [u8]) -> Result<()> {
+                out.fill(0xEE);
+                Ok(())
+            }
+            fn write_at(&self, at: u64, data: &[u8]) {
+                self.0.borrow_mut().push((at, data.len(), data[0]));
+            }
+        }
+
+        let kept = Rc::new(RefCell::new(Vec::new()));
+        let mut d = Disk::from_source(Box::new(Keeping(kept.clone())), 0);
+        assert!(d.write(3, &[0x33; 2 * BLOCK_SIZE]));
+        d.zero(100, 199);
+        assert_eq!(
+            *kept.borrow(),
+            [
+                (3 * BLOCK_SIZE as u64, 2 * BLOCK_SIZE, 0x33),
+                (100 * BLOCK_SIZE as u64, 64 * BLOCK_SIZE, 0),
+                (164 * BLOCK_SIZE as u64, 36 * BLOCK_SIZE, 0),
+            ]
+        );
     }
 
     /// A compressed image reads as the image it decodes to, block for block,
