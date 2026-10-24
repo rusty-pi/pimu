@@ -147,6 +147,15 @@ test.describe("powering on", () => {
     expect((await app.request()).images).toEqual({ sd: { url: "https://example.org/card.img", keep: true } });
   });
 
+  test("what a kept card wrote can be forgotten", async ({ app }) => {
+    await app.open("sd");
+    await app.drawer.getByRole("radio", { name: /A disk image/ }).check();
+    await app.drawer.getByRole("radio", { name: "URL" }).check();
+    await app.drawer.getByLabel("a card image URL").fill("https://example.org/card.img");
+    await app.drawer.getByRole("button", { name: "Forget what it wrote" }).click();
+    await expect(app.page.locator("#toast")).toHaveText(/back to the image as it is/);
+  });
+
   test("a GitHub directory is listed by the worker", async ({ app }) => {
     await app.open("sd");
     await app.drawer.getByRole("radio", { name: /GitHub directory/ }).check();
