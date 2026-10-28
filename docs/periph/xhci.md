@@ -119,7 +119,7 @@ Sources:
 
 Offset `0x010` · access `r` · 32 bits · reset `0x2841EB`
 
-`AC64`, 32-byte contexts, `PPC`, `xECP` `0x28` (BAR0 + `0xA0`).
+`AC64`, 32-byte contexts, `PPC`, `MaxPSASize` 4 (streams: 32 stream contexts per endpoint), `xECP` `0x28` (BAR0 + `0xA0`).
 
 Sources:
 

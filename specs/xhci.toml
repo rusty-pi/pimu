@@ -97,7 +97,7 @@ name   = "HCCPARAMS1"
 offset = 0x10
 access = "r"
 reset  = 0x002841EB
-notes  = "`AC64`, 32-byte contexts, `PPC`, `xECP` `0x28` (BAR0 + `0xA0`)."
+notes  = "`AC64`, 32-byte contexts, `PPC`, `MaxPSASize` 4 (streams: 32 stream contexts per endpoint), `xECP` `0x28` (BAR0 + `0xA0`)."
 
 [[register.source]]
 kind       = "measured"

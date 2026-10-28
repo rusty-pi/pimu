@@ -132,7 +132,7 @@ cut-down firmware, a UEFI armstub — are in
 |---|---|
 | `--sd <img>` | The SD card. |
 | `--emmc <img>` | An e-MMC part soldered to the same host, as a Compute Module has. |
-| `--usb <img>` | A USB mass-storage device on the VL805 (`BOOT_ORDER` 0x4). |
+| `--usb <img>` | A USB mass-storage device on the VL805 (`BOOT_ORDER` 0x4). `--usb-uas` makes it a UAS stick ([`docs/usb.md`](docs/usb.md)). |
 | `--otg <img>` | A stick in the USB-C socket, on the BCM2711's own xHCI (`BOOT_ORDER` 0x5). |
 | `--tftp <dir>` | The Ethernet cable, into a built-in DHCP, DNS and TFTP peer serving `<dir>` (`BOOT_ORDER` 0x2; `scripts/make-netboot.sh` builds one). |
 | `--http <dir>` | The same peer serving `<dir>` over HTTP (`BOOT_ORDER` 0x7): a signed `net_install/boot.img`. |
@@ -270,6 +270,8 @@ golden transcripts and the images each boot needs.
 | [`docs/boot-chain.md`](docs/boot-chain.md) | The boot stages, from the VPU ROM to Linux, and what each one reads |
 | [`docs/running.md`](docs/running.md) | Boot media, SD-card variants, OTP files, wall budgets |
 | [`docs/device-tree.md`](docs/device-tree.md) | Getting the patched device tree out of a run |
+| [`docs/usb.md`](docs/usb.md) | The USB mass-storage models (Bulk-Only and UAS) and the xHCI streams behind them |
+| [`docs/handover.md`](docs/handover.md) | The tagged block the EEPROM bootloader leaves at `0x40000`, and how it was checked |
 | [`docs/diagnostics.md`](docs/diagnostics.md) | The `--log` channels and `PIMU_*` switches that find a wall |
 | [`docs/mailbox.md`](docs/mailbox.md) | Asking the booted firmware a property or a `vcgencmd`, and what it answers |
 | [`docs/github-action.md`](docs/github-action.md) | Installing and running pimu from another repository's workflow |

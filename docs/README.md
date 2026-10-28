@@ -59,6 +59,8 @@ joined by name to an FXL6408 pin.
 | [`device-tree.md`](device-tree.md) | Getting the patched device tree out of a run |
 | [`periph/`](periph/) | Generated from `specs/*.toml`: one page per register block, with provenance, plus the `parent` tree and the interrupt lines |
 | [`vpu-isa.md`](vpu-isa.md) | The VideoCore IV instruction set, with the evidence for each statement — generated from [`isa/vpu.toml`](../isa/vpu.toml) |
+| [`usb.md`](usb.md) | The USB mass-storage models (Bulk-Only and UAS) and the xHCI streams behind them |
+| [`handover.md`](handover.md) | The tagged block the EEPROM bootloader leaves at `0x40000`, and how it was checked |
 | [`diagnostics.md`](diagnostics.md) | The log channels and `PIMU_*` switches that find a wall |
 | [`mailbox.md`](mailbox.md) | Asking the booted firmware a property or a `vcgencmd`, and what it answers |
 | [`references.md`](references.md) | Outside sources: datasheets, kernel drivers, other people's reverse engineering |
