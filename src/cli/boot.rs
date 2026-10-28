@@ -225,6 +225,15 @@ MEDIA AND NETWORK:
     --output <log>
               With --scenario: where the combined output goes. For a
               directory of scenarios, the directory the logs go in.
+    --usb-uas
+              Make the --usb stick a USB Attached SCSI one: Bulk-Only on
+              interface alternate setting 0 and UAS (command, status, data-in
+              and data-out pipes, streams) on setting 1, as UAS sticks have
+              them. A host that does not select setting 1 sees a plain
+              Bulk-Only stick.
+    --usb-uas-refuse
+              As --usb-uas, but the stick stalls the request that selects
+              setting 1, so a host has to fall back to Bulk-Only.
     --usb-mb <n>
               A stick given by --usb or --otg is <n> MiB, with the image at its
               start, as on a Pi whose first boot uses the rest.
@@ -471,6 +480,8 @@ struct BootOpts {
     entry: Option<u32>,
     usb_mb: Option<u64>,
     otg_dock: bool,
+    /// `--usb-uas` / `--usb-uas-refuse`: the `--usb` stick speaks UAS too.
+    usb_uas: UsbUas,
     display: bool,
     display_edid: Option<PathBuf>,
     /// No cap by default: the wall clock is the useful bound.
@@ -841,6 +852,7 @@ impl BootOpts {
         let mut entry: Option<u32> = None;
         let mut usb_mb: Option<u64> = None;
         let mut otg_dock = false;
+        let mut usb_uas = UsbUas::Off;
         let mut display = false;
         let mut display_edid: Option<PathBuf> = None;
         let mut max_steps: Option<u64> = None;
@@ -1060,6 +1072,8 @@ impl BootOpts {
                 )?,
                 "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
                 "--otg-dock" => otg_dock = true,
+                "--usb-uas" => usb_uas = UsbUas::On,
+                "--usb-uas-refuse" => usb_uas = UsbUas::Refused,
                 "--scenario" | "--record" | "--plan" | "--from-log" | "--output" => {
                     bail!("{a} belongs to --scenario, which `boot` takes out before this point")
                 }
@@ -1304,6 +1318,9 @@ impl BootOpts {
         if sd.is_some() && emmc.is_some() {
             bail!("--sd and --emmc are the same host: give one");
         }
+        if usb_uas != UsbUas::Off && usb.is_none() {
+            bail!("--usb-uas and --usb-uas-refuse change the --usb stick: give --usb too");
+        }
         let files_somewhere = [&sd, &usb, &otg, &emmc]
             .into_iter()
             .flatten()
@@ -1322,6 +1339,7 @@ impl BootOpts {
             entry,
             usb_mb,
             otg_dock,
+            usb_uas,
             display,
             display_edid,
             max_steps,
@@ -1689,6 +1707,14 @@ fn open_log(opts: &BootOpts) -> Result<Log> {
     Ok(Log::new(opts.log, out))
 }
 
+/// What kind of stick `--usb` is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum UsbUas {
+    Off,
+    On,
+    Refused,
+}
+
 type SharedUsbDisk = Rc<RefCell<pimu::periph::usb::Disk>>;
 
 /// `--usb <img>`: a Bulk-Only Transport mass-storage device on xHCI root port 2
@@ -1939,10 +1965,14 @@ impl<'a> Rig<'a> {
                 .attach_eeprom(pimu::periph::hat::HatEeprom::new(bytes));
         }
         if let Some(disk) = &self.usb_disk {
-            machine.pcie.endpoint.attach(
-                USB_ROOT_PORT,
-                Box::new(pimu::periph::usb::MassStorage::with_disk(disk.clone())),
-            );
+            let stick: Box<dyn pimu::periph::usb::UsbDevice> = match self.opts.usb_uas {
+                UsbUas::Off => Box::new(pimu::periph::usb::MassStorage::with_disk(disk.clone())),
+                UsbUas::On => Box::new(pimu::periph::usb::UasStorage::with_disk(disk.clone())),
+                UsbUas::Refused => {
+                    Box::new(pimu::periph::usb::UasStorage::with_disk(disk.clone()).refusing_uas())
+                }
+            };
+            machine.pcie.endpoint.attach(USB_ROOT_PORT, stick);
         }
         // The BCM2711's own xHCI: what `BOOT_ORDER` digit `0x5` boots from and
         // what `otg_mode=1` gives Linux.
@@ -3092,6 +3122,26 @@ mod tests {
 
     const BOOT_URL: &str =
         "https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/";
+
+    #[test]
+    fn usb_uas_changes_the_usb_stick_and_needs_one() {
+        let parse = |extra: &[&str]| {
+            let mut a = vec!["--eeprom", "pieeprom.bin"];
+            a.extend_from_slice(extra);
+            BootOpts::parse(&args(&a), Path::new(""))
+        };
+        let o = parse(&["--usb", "stick.img", "--usb-uas"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.usb_uas, UsbUas::On);
+        let o = parse(&["--usb", "stick.img", "--usb-uas-refuse"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.usb_uas, UsbUas::Refused);
+        let o = parse(&["--usb", "stick.img"]).unwrap().unwrap();
+        assert_eq!(o.usb_uas, UsbUas::Off);
+        assert!(parse(&["--usb-uas"]).is_err());
+    }
 
     #[test]
     fn a_url_is_the_card_and_not_the_file_to_boot() {

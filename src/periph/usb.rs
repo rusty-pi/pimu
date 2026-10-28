@@ -17,7 +17,7 @@
 //!   USB 2.0 socket, what `--otg <img>` puts on the USB-C port.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 pub use super::disk::Disk;
@@ -105,6 +105,17 @@ pub trait UsbDevice: 'static {
 
     fn data_out(&mut self, _ep: u8, _data: &[u8]) -> Xfer {
         Xfer::Stall
+    }
+
+    /// [`UsbDevice::data_in`] on a bulk endpoint set up with streams: `stream`
+    /// is the Stream ID the host rang the doorbell with. A device without
+    /// streams ignores it.
+    fn data_in_stream(&mut self, ep: u8, _stream: u32, len: usize) -> Xfer {
+        self.data_in(ep, len)
+    }
+
+    fn data_out_stream(&mut self, ep: u8, _stream: u32, data: &[u8]) -> Xfer {
+        self.data_out(ep, data)
     }
 
     /// The device on downstream port `port` (1-based), for a hub.
@@ -917,6 +928,345 @@ impl UsbDevice for MassStorage {
     }
 }
 
+const IU_COMMAND: u8 = 0x01;
+const IU_SENSE: u8 = 0x03;
+const IU_READ_READY: u8 = 0x06;
+const IU_WRITE_READY: u8 = 0x07;
+const COMMAND_IU_LEN: usize = 32;
+const SENSE_HEADER_LEN: usize = 16;
+const SCSI_CHECK_CONDITION: u8 = 0x02;
+
+/// `bInterfaceProtocol` of the Bulk-Only and the UAS alternate setting.
+const PROTOCOL_BOT: u8 = 0x50;
+const PROTOCOL_UAS: u8 = 0x62;
+/// `bmAttributes` of the SuperSpeed companion on the pipes that use streams:
+/// `MaxStreams` 4, so 16 stream IDs.
+const UAS_MAX_STREAMS: u8 = 4;
+
+/// One endpoint with its SuperSpeed companion, and for UAS its pipe usage
+/// descriptor.
+fn ss_endpoint(address: u8, max_streams: u8, pipe: Option<u8>) -> Vec<u8> {
+    let mut d = vec![
+        0x07,
+        0x05,
+        address,
+        0x02,
+        0x00,
+        0x04,
+        0x00, // endpoint, 1024 bytes
+        0x06,
+        0x30,
+        0x0F,
+        max_streams,
+        0x00,
+        0x00, // SS companion, burst 16
+    ];
+    if let Some(id) = pipe {
+        d.extend_from_slice(&[0x04, 0x24, id, 0x00]);
+    }
+    d
+}
+
+/// Where a command is: what the data pipes still owe, and the sense IU that
+/// ends it.
+struct UasCommand {
+    /// Bytes for the data-in pipe.
+    data_in: Vec<u8>,
+    /// A WRITE waiting for its data: next LBA, bytes still owed, and the
+    /// bytes of a block not yet whole.
+    write: Option<(u64, usize, Vec<u8>)>,
+    status: u8,
+}
+
+/// A SuperSpeed mass-storage stick with two alternate settings on its one
+/// interface, as every UAS stick has: setting 0 is Bulk-Only Transport
+/// (`bInterfaceProtocol` `0x50`, [`MassStorage`] behind it), setting 1 is USB
+/// Attached SCSI (`0x62`) with a command, a status, a data-in and a data-out
+/// pipe. `SET_INTERFACE` switches.
+///
+/// UAS carries a command as a 32-byte Command IU on the command pipe. The
+/// device answers on the status pipe with Read Ready or Write Ready IUs and a
+/// Sense IU when the command is done; the data goes on the data pipes. Status
+/// and data pipes use streams, and the device uses the command's tag as the
+/// stream ID of everything that belongs to it.
+///
+/// The descriptors are not measured on a real UAS stick: they are written
+/// from USB 3.2 section 9.6 and the UAS specification (INCITS 471) — endpoints
+/// with a SuperSpeed companion carrying `MaxStreams` and a pipe usage
+/// descriptor each (command 1, status 2, data-in 3, data-out 4) — with an
+/// invented identity. The SCSI answers are [`MassStorage`]'s.
+pub struct UasStorage {
+    common: CommonState,
+    desc: Descriptors,
+    bot: MassStorage,
+    alternate: u8,
+    /// `SET_INTERFACE` to the UAS setting fails, as on a stick or hub whose UAS
+    /// does not work: a host has to stay on Bulk-Only.
+    refuse_uas: bool,
+    commands: HashMap<u16, UasCommand>,
+    /// IUs for the status pipe, by stream ID.
+    status: HashMap<u32, VecDeque<Vec<u8>>>,
+}
+
+impl UasStorage {
+    pub fn new(image: Vec<u8>) -> UasStorage {
+        UasStorage::with_disk(Rc::new(RefCell::new(Disk::from_vec(image))))
+    }
+
+    pub fn with_disk(disk: Rc<RefCell<Disk>>) -> UasStorage {
+        let mut strings = HashMap::new();
+        strings.insert(0, lang_desc());
+        strings.insert(1, string_desc("pimu"));
+        strings.insert(2, string_desc("UAS Flash Drive"));
+        strings.insert(3, string_desc("0000000000000UAS"));
+        let interface = |alt: u8, endpoints: u8, protocol: u8| {
+            vec![0x09, 0x04, 0x00, alt, endpoints, 0x08, 0x06, protocol, 0x00]
+        };
+        let mut config = vec![0x09, 0x02, 0, 0, 0x01, 0x01, 0x00, 0x80, 0x26];
+        config.extend(interface(0, 2, PROTOCOL_BOT));
+        config.extend(ss_endpoint(0x01, 0, None));
+        config.extend(ss_endpoint(0x82, 0, None));
+        config.extend(interface(1, 4, PROTOCOL_UAS));
+        config.extend(ss_endpoint(0x01, 0, Some(1)));
+        config.extend(ss_endpoint(0x82, UAS_MAX_STREAMS, Some(2)));
+        config.extend(ss_endpoint(0x83, UAS_MAX_STREAMS, Some(3)));
+        config.extend(ss_endpoint(0x04, UAS_MAX_STREAMS, Some(4)));
+        let total = (config.len() as u16).to_le_bytes();
+        config[2..4].copy_from_slice(&total);
+        UasStorage {
+            common: CommonState::default(),
+            desc: Descriptors {
+                device: vec![
+                    0x12, 0x01, 0x10, 0x03, 0x00, 0x00, 0x00, 0x09, 0x09, 0x12, 0x01, 0x00, 0x00,
+                    0x01, 0x01, 0x02, 0x03, 0x01,
+                ],
+                config,
+                bos: None,
+                strings,
+                status: 0x00,
+            },
+            bot: MassStorage::with_disk(disk),
+            alternate: 0,
+            refuse_uas: false,
+            commands: HashMap::new(),
+            status: HashMap::new(),
+        }
+    }
+
+    /// A stick whose UAS setting cannot be selected.
+    pub fn refusing_uas(mut self) -> UasStorage {
+        self.refuse_uas = true;
+        self
+    }
+
+    fn select(&mut self, alternate: u8) {
+        self.alternate = alternate;
+        self.bot.reset();
+        self.commands.clear();
+        self.status.clear();
+    }
+
+    fn push_status(&mut self, tag: u16, iu: Vec<u8>) {
+        self.status.entry(tag as u32).or_default().push_back(iu);
+    }
+
+    fn ready_iu(id: u8, tag: u16) -> Vec<u8> {
+        let mut iu = vec![id, 0];
+        iu.extend_from_slice(&tag.to_be_bytes());
+        iu
+    }
+
+    fn sense_iu(tag: u16, status: u8) -> Vec<u8> {
+        let sense = if status == 0 {
+            Vec::new()
+        } else {
+            // ILLEGAL REQUEST, INVALID COMMAND OPERATION CODE.
+            let mut s = vec![0u8; 18];
+            s[0] = 0x70;
+            s[2] = 0x05;
+            s[7] = 10;
+            s[12] = 0x20;
+            s
+        };
+        let mut iu = vec![0u8; SENSE_HEADER_LEN];
+        iu[0] = IU_SENSE;
+        iu[2..4].copy_from_slice(&tag.to_be_bytes());
+        iu[6] = status;
+        iu[14..16].copy_from_slice(&(sense.len() as u16).to_be_bytes());
+        iu.extend(sense);
+        iu
+    }
+
+    fn command_iu(&mut self, iu: &[u8]) -> Xfer {
+        if iu.len() < COMMAND_IU_LEN || iu[0] != IU_COMMAND {
+            return Xfer::Stall;
+        }
+        let tag = u16::from_be_bytes([iu[2], iu[3]]);
+        let cdb_len = 16 + usize::from(iu[6] >> 2) * 4;
+        let cdb = &iu[16..iu.len().min(16 + cdb_len)];
+        let op = cdb.first().copied().unwrap_or(0);
+        if matches!(op, 0x2A | 0xAA | 0x8A) {
+            self.write_command(tag, cdb);
+            return Xfer::Ok(Vec::new());
+        }
+        let (data, status) = self.bot.scsi(cdb, 0);
+        if status != 0 {
+            self.push_status(tag, UasStorage::sense_iu(tag, SCSI_CHECK_CONDITION));
+        } else if data.is_empty() {
+            self.push_status(tag, UasStorage::sense_iu(tag, 0));
+        } else {
+            self.push_status(tag, UasStorage::ready_iu(IU_READ_READY, tag));
+            self.commands.insert(
+                tag,
+                UasCommand {
+                    data_in: data,
+                    write: None,
+                    status: 0,
+                },
+            );
+        }
+        Xfer::Ok(Vec::new())
+    }
+
+    fn write_command(&mut self, tag: u16, cdb: &[u8]) {
+        match lba_count(cdb) {
+            Some((lba, n)) if lba.saturating_add(n) <= self.bot.blocks() => {
+                self.commands.insert(
+                    tag,
+                    UasCommand {
+                        data_in: Vec::new(),
+                        write: Some((lba, n as usize * BLOCK_SIZE, Vec::new())),
+                        status: 0,
+                    },
+                );
+                self.push_status(tag, UasStorage::ready_iu(IU_WRITE_READY, tag));
+            }
+            _ => self.push_status(tag, UasStorage::sense_iu(tag, SCSI_CHECK_CONDITION)),
+        }
+    }
+
+    fn status_in(&mut self, stream: u32) -> Xfer {
+        match self.status.get_mut(&stream).and_then(VecDeque::pop_front) {
+            Some(iu) => Xfer::Ok(iu),
+            None => Xfer::Nak,
+        }
+    }
+
+    fn data_in_pipe(&mut self, stream: u32, len: usize) -> Xfer {
+        let tag = stream as u16;
+        let Some(cmd) = self.commands.get_mut(&tag) else {
+            return Xfer::Nak;
+        };
+        if cmd.data_in.is_empty() {
+            return Xfer::Nak;
+        }
+        let take = len.min(cmd.data_in.len());
+        let out: Vec<u8> = cmd.data_in.drain(..take).collect();
+        if cmd.data_in.is_empty() {
+            let status = cmd.status;
+            self.commands.remove(&tag);
+            self.push_status(tag, UasStorage::sense_iu(tag, status));
+        }
+        Xfer::Ok(out)
+    }
+
+    fn data_out_pipe(&mut self, stream: u32, data: &[u8]) -> Xfer {
+        let tag = stream as u16;
+        let Some(UasCommand {
+            write: Some((lba, owed, pending)),
+            ..
+        }) = self.commands.get_mut(&tag)
+        else {
+            return Xfer::Nak;
+        };
+        let take = data.len().min(*owed);
+        pending.extend_from_slice(&data[..take]);
+        *owed -= take;
+        let whole = pending.len() / BLOCK_SIZE * BLOCK_SIZE;
+        if whole > 0 {
+            self.bot.disk.borrow_mut().write(*lba, &pending[..whole]);
+            *lba += (whole / BLOCK_SIZE) as u64;
+            pending.drain(..whole);
+        }
+        if *owed == 0 {
+            self.commands.remove(&tag);
+            self.push_status(tag, UasStorage::sense_iu(tag, 0));
+        }
+        Xfer::Ok(Vec::new())
+    }
+}
+
+impl UsbDevice for UasStorage {
+    fn speed(&self) -> Speed {
+        Speed::Super
+    }
+
+    fn addressed(&self) -> bool {
+        self.common.address != 0
+    }
+
+    fn set_address(&mut self, address: u8) {
+        self.common.address = address;
+    }
+
+    fn reset(&mut self) {
+        self.common = CommonState::default();
+        self.select(0);
+    }
+
+    fn control(&mut self, setup: &Setup, data_out: &[u8]) -> Xfer {
+        if setup.request_type & 0x60 == 0x20 {
+            return self.bot.control(setup, data_out);
+        }
+        match (setup.request_type, setup.request) {
+            (0x01, REQ_SET_INTERFACE) => {
+                let alternate = setup.value as u8;
+                if setup.index != 0 || alternate > 1 || (alternate == 1 && self.refuse_uas) {
+                    return Xfer::Stall;
+                }
+                self.select(alternate);
+                Xfer::Ok(Vec::new())
+            }
+            (0x81, REQ_GET_INTERFACE) => Xfer::Ok(vec![self.alternate]),
+            (0x00, REQ_SET_CONFIGURATION) => {
+                self.select(0);
+                standard_control(&mut self.common, &self.desc, setup).unwrap_or(Xfer::Stall)
+            }
+            _ => standard_control(&mut self.common, &self.desc, setup).unwrap_or(Xfer::Stall),
+        }
+    }
+
+    fn data_in(&mut self, ep: u8, len: usize) -> Xfer {
+        self.data_in_stream(ep, 0, len)
+    }
+
+    fn data_out(&mut self, ep: u8, data: &[u8]) -> Xfer {
+        self.data_out_stream(ep, 0, data)
+    }
+
+    fn data_in_stream(&mut self, ep: u8, stream: u32, len: usize) -> Xfer {
+        if self.alternate == 0 {
+            return self.bot.data_in(ep, len);
+        }
+        match ep {
+            2 => self.status_in(stream),
+            3 => self.data_in_pipe(stream, len),
+            _ => Xfer::Stall,
+        }
+    }
+
+    fn data_out_stream(&mut self, ep: u8, stream: u32, data: &[u8]) -> Xfer {
+        if self.alternate == 0 {
+            return self.bot.data_out(ep, data);
+        }
+        match ep {
+            1 => self.command_iu(data),
+            4 => self.data_out_pipe(stream, data),
+            _ => Xfer::Stall,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1186,5 +1536,153 @@ mod tests {
             panic!("stall")
         };
         assert_eq!(csw[12], 1);
+    }
+
+    fn uas_command(tag: u16, cdb: &[u8]) -> Vec<u8> {
+        let mut iu = vec![0u8; COMMAND_IU_LEN];
+        iu[0] = IU_COMMAND;
+        iu[2..4].copy_from_slice(&tag.to_be_bytes());
+        iu[16..16 + cdb.len()].copy_from_slice(cdb);
+        iu
+    }
+
+    fn uas_stick() -> UasStorage {
+        let mut dev = UasStorage::new(vec![0x11; 4 * BLOCK_SIZE]);
+        ctrl(&mut dev, 0x01, REQ_SET_INTERFACE, 1, 0, 0);
+        dev
+    }
+
+    fn status_iu(dev: &mut UasStorage, stream: u32) -> Vec<u8> {
+        match dev.data_in_stream(2, stream, 128) {
+            Xfer::Ok(iu) => iu,
+            _ => panic!("no status IU"),
+        }
+    }
+
+    #[test]
+    fn a_uas_stick_describes_a_bot_and_a_uas_setting_on_one_interface() {
+        let mut dev = UasStorage::new(Vec::new());
+        let config = ctrl(&mut dev, 0x80, REQ_GET_DESCRIPTOR, 0x0200, 0, 512);
+        assert_eq!(
+            u16::from_le_bytes([config[2], config[3]]) as usize,
+            config.len()
+        );
+        let mut at = 0;
+        let (mut interfaces, mut pipes, mut streams) = (Vec::new(), Vec::new(), Vec::new());
+        while at < config.len() {
+            let d = &config[at..at + config[at] as usize];
+            match d[1] {
+                4 => interfaces.push((d[2], d[3], d[4], d[7])),
+                0x24 => pipes.push(d[2]),
+                0x30 => streams.push(d[3]),
+                _ => {}
+            }
+            at += d.len();
+        }
+        assert_eq!(interfaces, [(0, 0, 2, 0x50), (0, 1, 4, 0x62)]);
+        assert_eq!(pipes, [1, 2, 3, 4]);
+        assert_eq!(streams, [0, 0, 0, 4, 4, 4]);
+    }
+
+    #[test]
+    fn a_uas_read_gets_read_ready_data_and_a_sense_iu_on_the_tags_stream() {
+        let mut dev = uas_stick();
+        let mut cdb = [0u8; 10];
+        cdb[0] = 0x28;
+        cdb[5] = 2;
+        cdb[8] = 1;
+        assert!(matches!(
+            dev.data_out_stream(1, 0, &uas_command(7, &cdb)),
+            Xfer::Ok(_)
+        ));
+        assert!(
+            matches!(dev.data_in_stream(2, 1, 128), Xfer::Nak),
+            "other streams are idle"
+        );
+        assert_eq!(status_iu(&mut dev, 7), vec![IU_READ_READY, 0, 0, 7]);
+        let Xfer::Ok(data) = dev.data_in_stream(3, 7, 512) else {
+            panic!("no data")
+        };
+        assert_eq!(data, vec![0x11; BLOCK_SIZE]);
+        let sense = status_iu(&mut dev, 7);
+        assert_eq!(
+            (sense[0], sense[2..4].to_vec(), sense[6]),
+            (IU_SENSE, vec![0, 7], 0)
+        );
+    }
+
+    #[test]
+    fn a_uas_write_waits_for_its_write_ready_and_lands_on_the_disk() {
+        let mut dev = uas_stick();
+        let mut cdb = [0u8; 10];
+        cdb[0] = 0x2A;
+        cdb[5] = 1;
+        cdb[8] = 1;
+        dev.data_out_stream(1, 0, &uas_command(1, &cdb));
+        assert_eq!(status_iu(&mut dev, 1), vec![IU_WRITE_READY, 0, 0, 1]);
+        assert!(
+            matches!(dev.data_in_stream(2, 1, 128), Xfer::Nak),
+            "no sense before the data"
+        );
+        dev.data_out_stream(4, 1, &[0xAB; BLOCK_SIZE]);
+        assert_eq!(status_iu(&mut dev, 1)[6], 0);
+        assert_eq!(
+            dev.bot.disk.borrow().read(1, 1).unwrap(),
+            vec![0xAB; BLOCK_SIZE]
+        );
+    }
+
+    #[test]
+    fn uas_commands_without_data_end_in_a_sense_iu() {
+        let mut dev = uas_stick();
+        dev.data_out_stream(1, 0, &uas_command(1, &[0x00; 6]));
+        assert_eq!(status_iu(&mut dev, 1)[6], 0, "test unit ready");
+
+        let mut capacity = [0u8; 10];
+        capacity[0] = 0x25;
+        dev.data_out_stream(1, 0, &uas_command(1, &capacity));
+        assert_eq!(status_iu(&mut dev, 1)[0], IU_READ_READY);
+        let Xfer::Ok(data) = dev.data_in_stream(3, 1, 8) else {
+            panic!("no data")
+        };
+        assert_eq!(
+            data,
+            [0, 0, 0, 3, 0, 0, 2, 0],
+            "last LBA 3, 512-byte blocks"
+        );
+        status_iu(&mut dev, 1);
+
+        dev.data_out_stream(1, 0, &uas_command(1, &[0xEE; 6]));
+        let sense = status_iu(&mut dev, 1);
+        assert_eq!(sense[6], SCSI_CHECK_CONDITION);
+        assert_eq!(u16::from_be_bytes([sense[14], sense[15]]), 18);
+    }
+
+    #[test]
+    fn selecting_setting_0_goes_back_to_bulk_only() {
+        let mut dev = uas_stick();
+        assert_eq!(ctrl(&mut dev, 0x81, REQ_GET_INTERFACE, 0, 0, 1), vec![1]);
+        ctrl(&mut dev, 0x01, REQ_SET_INTERFACE, 0, 0, 0);
+        assert_eq!(ctrl(&mut dev, 0x81, REQ_GET_INTERFACE, 0, 0, 1), vec![0]);
+        assert!(matches!(dev.data_out(1, &cbw(0x00)), Xfer::Ok(_)));
+        let Xfer::Ok(csw) = dev.data_in(2, CSW_LEN) else {
+            panic!("stall")
+        };
+        assert_eq!(csw[..4], CSW_SIGNATURE.to_le_bytes());
+    }
+
+    #[test]
+    fn a_stick_that_refuses_uas_stalls_the_request_and_stays_bulk_only() {
+        let mut dev = UasStorage::new(vec![0; BLOCK_SIZE]).refusing_uas();
+        let setup = Setup {
+            request_type: 0x01,
+            request: REQ_SET_INTERFACE,
+            value: 1,
+            index: 0,
+            length: 0,
+        };
+        assert!(matches!(dev.control(&setup, &[]), Xfer::Stall));
+        assert!(matches!(dev.data_out(1, &cbw(0x00)), Xfer::Ok(_)));
+        assert!(matches!(dev.data_in(2, CSW_LEN), Xfer::Ok(_)));
     }
 }

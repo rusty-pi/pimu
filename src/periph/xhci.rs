@@ -12,8 +12,9 @@
 //!
 //! It is a synchronous model: a doorbell write runs the ring it points at to
 //! completion and posts the events before the write returns. No MSI/MSI-X
-//! delivery, no streams, no isochronous endpoints, and no scratchpad buffer use
-//! (the firmware allocates them; the model never touches them).
+//! delivery, no isochronous endpoints, no secondary stream arrays (a stream
+//! context is a transfer ring), and no scratchpad buffer use (the firmware
+//! allocates them; the model never touches them).
 
 use std::collections::BTreeMap;
 
@@ -265,6 +266,8 @@ const TRB_PORT_STATUS_CHANGE: u32 = 34;
 // Completion codes (xHCI 6.4.5).
 /// The Chain bit of a transfer or Link TRB: the next TRB belongs to the same TD.
 const TRB_CHAIN: u32 = 1 << 4;
+/// Configure Endpoint's Deconfigure bit (xHCI 6.4.3.5).
+const TRB_DECONFIGURE: u32 = 1 << 9;
 const CC_SUCCESS: u32 = 1;
 const CC_TRANSACTION_ERROR: u32 = 4;
 const CC_TRB_ERROR: u32 = 5;
@@ -272,6 +275,7 @@ const CC_STALL: u32 = 6;
 const CC_SLOT_NOT_ENABLED: u32 = 11;
 const CC_SHORT_PACKET: u32 = 13;
 const CC_NO_SLOTS: u32 = 9;
+const CC_INVALID_STREAM_ID: u32 = 10;
 
 /// State carried between the stages of one control TRB chain.
 #[derive(Default)]
@@ -390,7 +394,7 @@ pub struct Xhci {
     link_deadline: u64,
     /// Endpoints whose head TRB the device NAKed, retried by
     /// [`Xhci::run_parked`]: the transfer is still outstanding.
-    parked: Vec<(usize, u32)>,
+    parked: Vec<(usize, u32, u32)>,
     pub commands: u64,
     pub transfers: u64,
 }
@@ -832,7 +836,8 @@ impl Xhci {
             self.run_command_ring(mem);
         } else {
             let dci = value & 0xFF;
-            self.run_transfer_ring(target as usize, dci, mem);
+            let stream = value >> 16;
+            self.run_transfer_ring(target as usize, dci, stream, mem);
         }
         self.run_parked(mem);
     }
@@ -841,8 +846,8 @@ impl Xhci {
     /// what the device was waiting for, and on the wire the controller would
     /// have been retrying the token all along.
     fn run_parked(&mut self, mem: &mut dyn HostMem) {
-        for (slot, dci) in std::mem::take(&mut self.parked) {
-            self.run_transfer_ring(slot, dci, mem);
+        for (slot, dci, stream) in std::mem::take(&mut self.parked) {
+            self.run_transfer_ring(slot, dci, stream, mem);
         }
     }
 
@@ -918,14 +923,25 @@ impl Xhci {
             }
             TRB_ADDRESS_DEVICE => (self.address_device(slot_id, param, trb, mem), slot_id),
             TRB_CONFIGURE_ENDPOINT | TRB_EVALUATE_CONTEXT => {
-                (self.apply_input_context(slot_id, param, kind, mem), slot_id)
+                let deconfigure = kind == TRB_CONFIGURE_ENDPOINT && trb[3] & TRB_DECONFIGURE != 0;
+                if deconfigure {
+                    (self.deconfigure(slot_id, mem), slot_id)
+                } else {
+                    (self.apply_input_context(slot_id, param, kind, mem), slot_id)
+                }
             }
             TRB_SET_TR_DEQUEUE => {
                 let dci = trb[3] >> 16 & 0x1F;
+                let stream = trb[2] >> 16;
                 if let Some(ctx) = self.device_context(slot_id, mem) {
                     let ep = ctx + self.csz() * dci as u64;
-                    mem.write32(ep + 8, param as u32);
-                    mem.write32(ep + 12, (param >> 32) as u32);
+                    match Xhci::dequeue_at(ep, stream, mem) {
+                        Some(at) => {
+                            mem.write32(at, param as u32);
+                            mem.write32(at + 4, (param >> 32) as u32);
+                        }
+                        None => return (CC_TRB_ERROR, slot_id),
+                    }
                 }
                 (CC_SUCCESS, slot_id)
             }
@@ -1042,8 +1058,7 @@ impl Xhci {
             let bit = 1u32 << dci;
             if drop_flags & bit != 0 && add_flags & bit == 0 {
                 let ep = ctx + self.csz() * dci as u64;
-                let dw0 = mem.read32(ep) & !0x7;
-                mem.write32(ep, dw0);
+                mem.write_bytes(ep, &[0; 0x20]);
                 continue;
             }
             if add_flags & bit == 0 {
@@ -1062,6 +1077,43 @@ impl Xhci {
             mem.write32(ctx + 12, (dw3 & !(0x1F << 27)) | (3 << 27));
         }
         CC_SUCCESS
+    }
+
+    /// `Configure Endpoint` with the Deconfigure bit: every endpoint but 0 is
+    /// dropped and the slot goes back to Addressed (xHCI 4.6.6). The input
+    /// context is not read.
+    fn deconfigure(&mut self, slot: u32, mem: &mut dyn HostMem) -> u32 {
+        let Some(ctx) = self.device_context(slot, mem) else {
+            return CC_SLOT_NOT_ENABLED;
+        };
+        for dci in 2..32u64 {
+            mem.write_bytes(ctx + self.csz() * dci, &[0; 0x20]);
+        }
+        let dw3 = mem.read32(ctx + 12);
+        mem.write32(ctx + 12, (dw3 & !(0x1F << 27)) | (2 << 27));
+        let dw0 = mem.read32(ctx);
+        mem.write32(ctx, dw0 & !(0x1F << 27) | (1 << 27));
+        CC_SUCCESS
+    }
+
+    /// Where the 64-bit dequeue pointer of `stream` lives, given the endpoint
+    /// context at `ep`: in the context itself without streams, in the stream
+    /// context otherwise. Stream 0 is reserved. The array is read as a flat
+    /// list of Stream Contexts whatever `LSA` says: the xHCI spec wants `LSA`
+    /// set for that, but nuboot leaves it clear and has stream contexts of type
+    /// Primary Transfer Ring in the array, and the VL805 on a Raspberry Pi 4B
+    /// d03115 runs it that way.
+    fn dequeue_at(ep: u64, stream: u32, mem: &dyn HostMem) -> Option<u64> {
+        let dw0 = mem.read32(ep);
+        let max_pstreams = (dw0 >> 10) & 0x1F;
+        if max_pstreams == 0 {
+            return Some(ep + 8);
+        }
+        let array = mem.read64(ep + 8) & !0xF;
+        if array == 0 || stream == 0 || stream >= 1 << (max_pstreams + 1) {
+            return None;
+        }
+        Some(array + 16 * stream as u64)
     }
 
     fn resolve(&mut self, root_port: usize, route: u32) -> Option<&mut (dyn UsbDevice + 'static)> {
@@ -1091,7 +1143,10 @@ impl Xhci {
         self.resolve(root_port, route)
     }
 
-    fn run_transfer_ring(&mut self, slot: usize, dci: u32, mem: &mut dyn HostMem) {
+    /// Run the transfer ring `dci` of `slot` points at. With streams the ring
+    /// is the one `stream` has in the endpoint's stream context array; without
+    /// them `stream` is ignored.
+    fn run_transfer_ring(&mut self, slot: usize, dci: u32, stream: u32, mem: &mut dyn HostMem) {
         if !self.running || dci == 0 || dci > 31 {
             return;
         }
@@ -1099,7 +1154,22 @@ impl Xhci {
             return;
         };
         let ep_ctx = ctx + self.csz() * dci as u64;
-        let deq = mem.read64(ep_ctx + 8);
+        let streamed = (mem.read32(ep_ctx) >> 10) & 0x1F != 0;
+        let deq_at = Xhci::dequeue_at(ep_ctx, stream, mem);
+        let deq = deq_at.map_or(0, |at| mem.read64(at));
+        let primary_ring = (deq >> 1) & 0x7 == 1;
+        let Some(deq_at) = deq_at.filter(|_| !streamed || primary_ring) else {
+            if streamed {
+                let event = [
+                    0,
+                    0,
+                    CC_INVALID_STREAM_ID << 24,
+                    ((slot as u32) << 24) | (dci << 16) | (TRB_TRANSFER_EVENT << 10),
+                ];
+                self.post_completion(event, mem);
+            }
+            return;
+        };
         let mut ptr = deq & !0xF;
         let mut ccs = deq & 1 != 0;
         if ptr == 0 {
@@ -1142,11 +1212,11 @@ impl Xhci {
                 trb[3]
             );
             let Some((code, residue)) =
-                self.run_transfer_trb(slot as u32, dci, kind, &trb, &mut ctrl, mem)
+                self.run_transfer_trb(slot as u32, dci, stream, kind, &trb, &mut ctrl, mem)
             else {
                 // NAKed: the TRB stays at the head and no event goes out.
-                if !self.parked.contains(&(slot, dci)) {
-                    self.parked.push((slot, dci));
+                if !self.parked.contains(&(slot, dci, stream)) {
+                    self.parked.push((slot, dci, stream));
                 }
                 break;
             };
@@ -1177,14 +1247,17 @@ impl Xhci {
                 break; // an error halts the endpoint
             }
         }
-        mem.write32(ep_ctx + 8, (ptr as u32 & !0xF) | u32::from(ccs));
-        mem.write32(ep_ctx + 12, (ptr >> 32) as u32);
+        let kept = if streamed { deq as u32 & 0xE } else { 0 };
+        mem.write32(deq_at, (ptr as u32 & !0xF) | kept | u32::from(ccs));
+        mem.write32(deq_at + 4, (ptr >> 32) as u32);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_transfer_trb(
         &mut self,
         slot: u32,
         dci: u32,
+        stream: u32,
         kind: u32,
         trb: &[u32; 4],
         ctrl: &mut ControlState,
@@ -1263,7 +1336,7 @@ impl Xhci {
                     return Some((CC_TRB_ERROR, len as u32));
                 };
                 if dir_in {
-                    match dev.data_in(ep as u8, len) {
+                    match dev.data_in_stream(ep as u8, stream, len) {
                         Xfer::Nak => None,
                         Xfer::Stall => Some((CC_STALL, len as u32)),
                         Xfer::Ok(data) => {
@@ -1281,7 +1354,7 @@ impl Xhci {
                     }
                 } else {
                     let data = mem.read_bytes(buf, len);
-                    match dev.data_out(ep as u8, &data) {
+                    match dev.data_out_stream(ep as u8, stream, &data) {
                         Xfer::Nak => None,
                         Xfer::Stall => Some((CC_STALL, len as u32)),
                         Xfer::Ok(_) => Some((CC_SUCCESS, 0)),
@@ -1806,6 +1879,155 @@ mod tests {
         let ev = [0, 1, 2, 3].map(|i| mem.read32(EVENT_RING + 48 + 4 * i));
         assert_eq!(ev[2] >> 24, CC_SHORT_PACKET);
         assert_eq!(ev[2] & 0x00FF_FFFF, 64 - 18, "residue");
+    }
+
+    const COMMAND_PIPE_RING: u64 = 0xD000;
+    const STATUS_ARRAY: u64 = 0xD100;
+    const STATUS_RING: u64 = 0xD200;
+    const DATA_ARRAY: u64 = 0xD300;
+    const DATA_RING: u64 = 0xD400;
+    const COMMAND_IU: u64 = 0xD500;
+    const STATUS_IU: u64 = 0xD600;
+    const DATA_BUFFER: u64 = 0xE000;
+
+    /// A UAS stick on root port 1, switched to its UAS setting, with the four
+    /// pipes' endpoint contexts written by hand: command on DCI 2, status on
+    /// DCI 5 and data-in on DCI 7, the last two with four streams of which
+    /// only stream 1 is enabled.
+    fn uas_stick() -> (Xhci, VecMem) {
+        let (mut hc, mut mem) = started();
+        let mut image = vec![0x11u8; 512];
+        image.extend_from_slice(&[0x22u8; 512]);
+        hc.attach(1, Box::new(crate::periph::usb::UasStorage::new(image)));
+        addressed(&mut hc, &mut mem, 2, COMMAND_PIPE_RING);
+        control_no_data(&mut mem, EP0_RING, [0x01, 11, 1, 0, 0, 0, 0, 0]);
+        hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
+        for (dci, array, ring) in [(5, STATUS_ARRAY, STATUS_RING), (7, DATA_ARRAY, DATA_RING)] {
+            let ep = DEV_CTX + 0x20 * dci;
+            mem.write32(ep, (1 << 10) | 1);
+            mem.write32(ep + 8, array as u32);
+            mem.write32(array + 16, ring as u32 | 2 | 1);
+        }
+        (hc, mem)
+    }
+
+    fn queue_normal(mem: &mut VecMem, at: u64, buf: u64, len: u32) {
+        put_trb(
+            mem,
+            at,
+            [buf as u32, 0, len, (TRB_NORMAL << 10) | (1 << 5) | 1],
+        );
+    }
+
+    fn transfer_event(mem: &VecMem, trb: u64) -> Option<(u32, u32)> {
+        (0..16).find_map(|i| {
+            let ev = [0, 1, 2, 3].map(|w| mem.read32(EVENT_RING + 16 * i + 4 * w));
+            let kind = (ev[3] >> 10) & 0x3F;
+            (kind == TRB_TRANSFER_EVENT && ev[0] as u64 == trb)
+                .then_some((ev[2] >> 24, ev[2] & 0x00FF_FFFF))
+        })
+    }
+
+    fn ring(hc: &mut Xhci, mem: &mut VecMem, dci: u32, stream: u32) {
+        hc.write(DBOFF + 4, Width::Word, dci | stream << 16, mem);
+    }
+
+    #[test]
+    fn a_read_runs_over_stream_1_of_the_status_and_data_pipes() {
+        let (mut hc, mut mem) = uas_stick();
+        queue_normal(&mut mem, STATUS_RING, STATUS_IU, 128);
+        queue_normal(&mut mem, DATA_RING, DATA_BUFFER, 512);
+        mem.write_bytes(COMMAND_IU, &[0x01, 0, 0, 1]);
+        mem.write_bytes(COMMAND_IU + 16, &[0x28, 0, 0, 0, 0, 1, 0, 0, 1, 0]);
+        queue_normal(&mut mem, COMMAND_PIPE_RING, COMMAND_IU, 32);
+
+        ring(&mut hc, &mut mem, 5, 1);
+        ring(&mut hc, &mut mem, 7, 1);
+        assert_eq!(transfer_event(&mem, STATUS_RING), None, "no IU to send yet");
+        ring(&mut hc, &mut mem, 2, 0);
+
+        assert_eq!(
+            transfer_event(&mem, COMMAND_PIPE_RING),
+            Some((CC_SUCCESS, 0))
+        );
+        assert_eq!(
+            transfer_event(&mem, STATUS_RING),
+            Some((CC_SHORT_PACKET, 128 - 4))
+        );
+        assert_eq!(
+            mem.read_bytes(STATUS_IU, 4),
+            vec![0x06, 0, 0, 1],
+            "read ready"
+        );
+        assert_eq!(transfer_event(&mem, DATA_RING), Some((CC_SUCCESS, 0)));
+        assert_eq!(mem.read_bytes(DATA_BUFFER, 512), vec![0x22; 512]);
+
+        queue_normal(&mut mem, STATUS_RING + 16, STATUS_IU, 128);
+        ring(&mut hc, &mut mem, 5, 1);
+        assert!(transfer_event(&mem, STATUS_RING + 16).is_some());
+        assert_eq!(mem.read_bytes(STATUS_IU, 1), vec![0x03], "sense");
+        assert_eq!(mem.read_bytes(STATUS_IU + 6, 1), vec![0], "good status");
+        assert_eq!(
+            mem.read32(STATUS_ARRAY + 16),
+            (STATUS_RING as u32 + 32) | 2 | 1,
+            "the stream context's dequeue moved, its type stayed"
+        );
+        assert_eq!(mem.read32(DEV_CTX + 0x20 * 5 + 8), STATUS_ARRAY as u32);
+    }
+
+    #[test]
+    fn a_stream_without_a_context_is_an_invalid_stream_id() {
+        let (mut hc, mut mem) = uas_stick();
+        queue_normal(&mut mem, STATUS_RING, STATUS_IU, 128);
+        ring(&mut hc, &mut mem, 5, 2);
+        let codes: Vec<u32> = (0..16)
+            .map(|i| mem.read32(EVENT_RING + 16 * i + 8) >> 24)
+            .collect();
+        assert!(codes.contains(&CC_INVALID_STREAM_ID), "{codes:?}");
+        assert_eq!(mem.read32(STATUS_ARRAY + 16) & !0xF, STATUS_RING as u32);
+    }
+
+    #[test]
+    fn set_tr_dequeue_moves_one_streams_ring() {
+        let (mut hc, mut mem) = uas_stick();
+        let ev = command(
+            &mut hc,
+            &mut mem,
+            2,
+            4,
+            [
+                0x1230 | 2 | 1,
+                0,
+                1 << 16,
+                (TRB_SET_TR_DEQUEUE << 10) | (5 << 16) | (1 << 24) | 1,
+            ],
+        );
+        assert_eq!(ev[2] >> 24, CC_SUCCESS);
+        assert_eq!(mem.read32(STATUS_ARRAY + 16), 0x1230 | 2 | 1);
+        assert_eq!(mem.read32(DEV_CTX + 0x20 * 5 + 8), STATUS_ARRAY as u32);
+    }
+
+    #[test]
+    fn deconfigure_drops_every_endpoint_but_the_default_one() {
+        let (mut hc, mut mem) = uas_stick();
+        let ev = command(
+            &mut hc,
+            &mut mem,
+            2,
+            4,
+            [
+                0,
+                0,
+                0,
+                (TRB_CONFIGURE_ENDPOINT << 10) | TRB_DECONFIGURE | (1 << 24) | 1,
+            ],
+        );
+        assert_eq!(ev[2] >> 24, CC_SUCCESS);
+        for dci in [2, 5, 7] {
+            assert_eq!(mem.read_bytes(DEV_CTX + 0x20 * dci, 0x20), vec![0; 0x20]);
+        }
+        assert_ne!(mem.read32(DEV_CTX + 0x28) & !0xF, 0, "endpoint 0 is kept");
+        assert_eq!(mem.read32(DEV_CTX + 12) >> 27, 2, "slot back to Addressed");
     }
 
     /// The capability block must stay byte-identical to a Raspberry Pi 4B
