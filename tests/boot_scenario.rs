@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pimu::harness::boot::{self, BootScenario, GoldenCheck, RetiredCounts};
+use pimu::harness::boot::{self, BootScenario, FileSpec, GoldenCheck, MediumSpec, RetiredCounts};
 
 fn scenario_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/boot/firmware.yaml")
@@ -324,7 +324,11 @@ fn every_boot_scenario_loads_and_plans_its_media() {
             "{}: every milestone says why",
             path.display()
         );
-        let joined = scn.boot_args(Path::new("/tmp/c")).join(" ");
+        let mut staged = scn.clone();
+        staged
+            .stage(&std::env::temp_dir().join(format!("pimu-plan-{}", std::process::id())))
+            .expect("listed media stage");
+        let joined = staged.boot_args(Path::new("/tmp/c")).join(" ");
         for (flag, media) in [
             ("--sd ", scn.boot.sd.is_some()),
             ("--usb ", scn.boot.usb.is_some()),
@@ -349,20 +353,25 @@ fn every_boot_scenario_loads_and_plans_its_media() {
                 assert!(joined.contains(&format!("{flag} {v}")), "{joined}");
             }
         }
-        let media = [
-            scn.boot.sd.is_some(),
-            scn.boot.usb.is_some(),
-            scn.boot.otg.is_some(),
-            scn.boot.tftp.is_some(),
-            scn.boot.http.is_some(),
-            scn.boot.eeprom_pubkey.is_some(),
-        ];
-        assert_eq!(
-            scn.inputs().len(),
-            1 + media.iter().filter(|m| **m).count(),
-            "{}",
-            path.display()
-        );
+        let listed = |medium: &Option<MediumSpec>| match medium {
+            Some(MediumSpec::Partitions(disk)) => disk
+                .partitions
+                .iter()
+                .flat_map(|p| p.files.values())
+                .filter(|f| matches!(f, FileSpec::From(from) if !from.starts_with("http")))
+                .count(),
+            Some(MediumSpec::Path(_)) => 1,
+            None => 0,
+        };
+        let media = listed(&scn.boot.sd)
+            + listed(&scn.boot.usb)
+            + listed(&scn.boot.otg)
+            + [&scn.boot.tftp, &scn.boot.http]
+                .into_iter()
+                .filter(|m| m.is_some())
+                .count()
+            + usize::from(scn.boot.eeprom_pubkey.is_some());
+        assert_eq!(scn.inputs().len(), 1 + media, "{}", path.display());
         let text = std::fs::read_to_string(scn.retired_path().unwrap())
             .unwrap_or_else(|e| panic!("{}: {e}", scn.retired_path().unwrap().display()));
         let counts = RetiredCounts::parse(&text).expect("the retired counts parse");

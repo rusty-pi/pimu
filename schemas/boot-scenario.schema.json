@@ -43,7 +43,7 @@
         "http": {
           "anyOf": [
             {
-              "$ref": "#/$defs/MediumSpec"
+              "$ref": "#/$defs/NetRootSpec"
             },
             {
               "type": "null"
@@ -125,7 +125,7 @@
         "tftp": {
           "anyOf": [
             {
-              "$ref": "#/$defs/MediumSpec"
+              "$ref": "#/$defs/NetRootSpec"
             },
             {
               "type": "null"
@@ -176,7 +176,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/FileSpec"
           },
-          "description": "File name on the card (a `/` makes a directory) and where it comes from.",
+          "description": "File name in the tree served (a `/` makes a directory) and where it\ncomes from.",
           "type": "object"
         }
       },
@@ -233,6 +233,13 @@
         }
       ]
     },
+    "Format": {
+      "enum": [
+        "vfat",
+        "ext4"
+      ],
+      "type": "string"
+    },
     "GoldenSpec": {
       "additionalProperties": false,
       "properties": {
@@ -257,10 +264,10 @@
           "type": "string"
         },
         {
-          "$ref": "#/$defs/CardFiles"
+          "$ref": "#/$defs/PartitionsSpec"
         }
       ],
-      "description": "A boot medium: a disk image, a directory or a URL as `boot --sd` takes them,\nor the files of a boot partition listed here, which become the card."
+      "description": "A boot medium: a disk image, a directory or a URL as `boot --sd` takes them,\nor a disk built out of the partitions listed here."
     },
     "Milestone": {
       "additionalProperties": false,
@@ -302,6 +309,104 @@
       ],
       "type": "object"
     },
+    "NetRootSpec": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/CardFiles"
+        }
+      ],
+      "description": "What the network peer serves: a directory or a URL as `boot --tftp` takes\nthem, or the files listed here."
+    },
+    "PartitionSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FileSpec"
+          },
+          "default": {},
+          "description": "File name in the filesystem (a `/` makes a directory) and where it\ncomes from.",
+          "type": "object"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The filesystem to make in the partition. Without one it is zeros, and\n`size` says how long."
+        },
+        "label": {
+          "default": null,
+          "description": "The partition's name in the GPT.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Size"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "At least this long, in bytes or with a `K`, `M`, `G` or `T` (powers of\n1024). A filesystem is as long as its files need, with some room to\nspare, if this is less."
+        },
+        "type": {
+          "$ref": "#/$defs/PartitionType",
+          "description": "What the partition is for, which is the GUID the GPT names it by (the\nones for the architecture of the board: `root` is `root-arm64`)."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "PartitionType": {
+      "oneOf": [
+        {
+          "enum": [
+            "root",
+            "usr",
+            "usr-verity",
+            "usr-verity-sig"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "esp",
+          "description": "EFI System Partition.",
+          "type": "string"
+        }
+      ]
+    },
+    "PartitionsSpec": {
+      "additionalProperties": false,
+      "description": "The partitions of a disk, in the order they lie on it.",
+      "properties": {
+        "partitions": {
+          "items": {
+            "$ref": "#/$defs/PartitionSpec"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "partitions"
+      ],
+      "type": "object"
+    },
     "Pattern": {
       "anyOf": [
         {
@@ -314,6 +419,19 @@
           "type": "array"
         }
       ]
+    },
+    "Size": {
+      "anyOf": [
+        {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "A byte count: a number, or text such as `256M`."
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

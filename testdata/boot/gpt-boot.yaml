@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=../../schemas/boot-scenario.schema.json
+# The firmware boot from an SD card with a GPT instead of an MBR.
+#
+# `firmware.yaml` boots a card that `scripts/make-sd.sh` writes: an MBR and a
+# FAT32 boot partition. This one is built by `pimu` out of `partitions`, after
+# `systemd-repart`: a GPT, an `esp` formatted `vfat` that holds what the
+# bootloader reads, and an `ext4` root that nothing reads.
+
+# Re-record the golden and the retired counts with:
+#   pimu boot --scenario testdata/boot/gpt-boot.yaml --record
+
+name: "gpt-boot"
+description: "pieeprom.bin + start4.elf boot from a GPT card made of partitions, through to the ARM hand-off."
+
+boot:
+  eeprom: "../../firmware/pieeprom.bin"
+  bootconf: ["BOOT_UART=1"]
+  sd:
+    partitions:
+      - type: esp
+        format: vfat
+        label: boot
+        files:
+          start4.elf: "../../firmware/start4.elf"
+          fixup4.dat: "../../firmware/fixup4.dat"
+          bcm2711-rpi-4-b.dtb: "../../firmware/bcm2711-rpi-4-b.dtb"
+          config.txt: { inline: "enable_uart=1\nuart_2ndstage=1\narm_64bit=1\n" }
+          cmdline.txt: { inline: "console=serial0,115200\n" }
+          kernel8.img: { builtin: halt }
+      - type: root
+        format: ext4
+        label: rootfs
+        size: 32M
+  wall_secs: 330
+  max_skipped: 0
+
+golden:
+  path: "golden/gpt-boot.txt"
+
+milestones:
+  - why: "The bootloader reads config.txt out of the first partition of a GPT, with no MBR partition entry to find it by."
+    line: "Read config.txt bytes"
+
+  - why: "...and start4.elf, which it can only have found in that partition."
+    line: "Read start4.elf bytes  2298048"
+
+  - why: "...and fixup4.dat, the last file it loads before handing over."
+    line: "Read fixup4.dat bytes     5512"
+
+  - why: "start4 runs and loads the kernel from the same partition."
+    line: ["MESS:", "Loaded 'kernel8.img'"]
+
+  - why: "The firmware reached the ARM hand-off."
+    line: "result: ok — the firmware started the ARM"

@@ -86,7 +86,30 @@ pub fn entries_of_dir(dir: &Path) -> Result<Vec<Entry>> {
 /// A card out of a tree described rather than walked, as a listing over HTTP
 /// gives one ([`crate::remote::listing`]).
 pub fn card_from_entries(entries: Vec<Entry>) -> Result<Card> {
-    Builder::default().build(entries)
+    let volume = volume_from_entries(entries, PART_START, 0)?;
+    let mut meta = vec![0u8; PART_START as usize * BLOCK_SIZE + volume.meta.len()];
+    mbr(&mut meta[..BLOCK_SIZE], volume.sectors as u32);
+    meta[PART_START as usize * BLOCK_SIZE..].copy_from_slice(&volume.meta);
+    let mut extents = volume.extents;
+    for extent in &mut extents {
+        extent.lba += PART_START as u64;
+    }
+    Ok(Card {
+        meta,
+        extents,
+        blocks: (PART_START as u64 + volume.sectors).next_multiple_of(1024),
+    })
+}
+
+/// A FAT32 volume of the entries, at least `min_sectors` long, as a partition
+/// that starts at sector `hidden` of its disk. Sectors in the result count from
+/// the volume's own first one.
+pub fn volume_from_entries(
+    entries: Vec<Entry>,
+    hidden: u32,
+    min_sectors: u64,
+) -> Result<crate::layout::Volume> {
+    Builder::default().build(entries, hidden, min_sectors)
 }
 
 /// One entry of the card's tree. The order is the order the firmware finds them
@@ -191,7 +214,12 @@ impl Builder {
         me
     }
 
-    fn build(mut self, root: Vec<Entry>) -> Result<Card> {
+    fn build(
+        mut self,
+        root: Vec<Entry>,
+        hidden: u32,
+        min_sectors: u64,
+    ) -> Result<crate::layout::Volume> {
         self.plan(root, None);
 
         // Cluster 2 is the root directory, which is what the boot sector says
@@ -236,10 +264,13 @@ impl Builder {
             }
         }
 
-        let clusters = (fat.len() as u32 - 2).max(MIN_CLUSTERS);
+        let wanted = min_sectors.div_ceil(SECTORS_PER_CLUSTER as u64);
+        let clusters = (fat.len() as u32 - 2)
+            .max(MIN_CLUSTERS)
+            .max(u32::try_from(wanted).unwrap_or(u32::MAX));
         let fat_sectors = (clusters + 2).div_ceil(BLOCK_SIZE as u32 / 4);
-        let data_start = PART_START + RESERVED_SECTORS + FATS * fat_sectors;
-        let part_sectors = data_start - PART_START + clusters * SECTORS_PER_CLUSTER;
+        let data_start = RESERVED_SECTORS + FATS * fat_sectors;
+        let part_sectors = data_start + clusters * SECTORS_PER_CLUSTER;
         let lba_of = |cluster: u32| (data_start + (cluster - 2) * SECTORS_PER_CLUSTER) as u64;
         for extent in &mut extents {
             extent.lba = lba_of(extent.lba as u32);
@@ -252,15 +283,14 @@ impl Builder {
             .max()
             .unwrap_or(data_start as u64);
         let mut meta = vec![0u8; dirs_end as usize * BLOCK_SIZE];
-        mbr(&mut meta[..BLOCK_SIZE], part_sectors);
-        let part = &mut meta[PART_START as usize * BLOCK_SIZE..];
-        boot_sector(part, part_sectors, fat_sectors);
+        let part = &mut meta[..];
+        boot_sector(part, hidden, part_sectors, fat_sectors);
         let (first, rest) = part.split_at_mut(6 * BLOCK_SIZE);
         rest[..BLOCK_SIZE].copy_from_slice(&first[..BLOCK_SIZE]);
         fs_info(&mut part[BLOCK_SIZE..2 * BLOCK_SIZE]);
         fs_info(&mut part[7 * BLOCK_SIZE..8 * BLOCK_SIZE]);
 
-        let fat_at = (PART_START + RESERVED_SECTORS) as usize * BLOCK_SIZE;
+        let fat_at = RESERVED_SECTORS as usize * BLOCK_SIZE;
         for copy in 0..FATS as usize {
             let at = fat_at + copy * fat_sectors as usize * BLOCK_SIZE;
             for (i, entry) in fat.iter().enumerate() {
@@ -285,11 +315,10 @@ impl Builder {
             meta[at..at + bytes.len()].copy_from_slice(&bytes);
         }
 
-        let blocks = (PART_START + part_sectors) as u64;
-        Ok(Card {
+        Ok(crate::layout::Volume {
             meta,
             extents,
-            blocks: blocks.next_multiple_of(1024),
+            sectors: part_sectors as u64,
         })
     }
 
@@ -336,7 +365,7 @@ fn mbr(sector: &mut [u8], part_sectors: u32) {
     sector[510..512].copy_from_slice(&[0x55, 0xaa]);
 }
 
-fn boot_sector(part: &mut [u8], part_sectors: u32, fat_sectors: u32) {
+fn boot_sector(part: &mut [u8], hidden: u32, part_sectors: u32, fat_sectors: u32) {
     let s = &mut part[..BLOCK_SIZE];
     s[0..3].copy_from_slice(&[0xeb, 0x58, 0x90]);
     s[3..11].copy_from_slice(b"pimu    ");
@@ -347,7 +376,7 @@ fn boot_sector(part: &mut [u8], part_sectors: u32, fat_sectors: u32) {
     s[21] = 0xf8;
     s[24..26].copy_from_slice(&32u16.to_le_bytes());
     s[26..28].copy_from_slice(&64u16.to_le_bytes());
-    s[28..32].copy_from_slice(&PART_START.to_le_bytes());
+    s[28..32].copy_from_slice(&hidden.to_le_bytes());
     s[32..36].copy_from_slice(&part_sectors.to_le_bytes());
     s[36..40].copy_from_slice(&fat_sectors.to_le_bytes());
     s[44..48].copy_from_slice(&2u32.to_le_bytes());

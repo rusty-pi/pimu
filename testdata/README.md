@@ -20,6 +20,7 @@ it.
 | Scenario | Boot | Card |
 |---|---|---|
 | `firmware.yaml` | SD card, through to `arm_loader` | `sd-halt.img` |
+| `gpt-boot.yaml` | SD card with a GPT, built from `partitions` (no image to make) | none |
 | `usb-boot.yaml` | USB mass storage on the VL805 (`BOOT_ORDER` 0x4), no SD card | `sd-halt.img` |
 | `otg-boot.yaml` | USB mass storage on the USB-C port (`BOOT_ORDER` 0x5), no SD card | `sd-halt.img` |
 | `tftp-boot.yaml` | Network boot over TFTP | `firmware/netboot/` |

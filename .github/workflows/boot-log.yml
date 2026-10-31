@@ -255,6 +255,8 @@ jobs:
         include:
           - name: firmware
             scenarios: firmware
+          - name: gpt-boot
+            scenarios: gpt-boot
           - name: usb-boot
             scenarios: usb-boot
           - name: otg-boot

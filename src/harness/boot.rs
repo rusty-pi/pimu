@@ -21,6 +21,8 @@ use serde::Deserialize;
 
 use crate::harness::capture::transcript;
 use crate::harness::regression::unified_diff;
+pub use crate::layout::{Builtin, FileSpec};
+use crate::layout::{PartitionsSpec, PARTITIONS_PREFIX};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -59,10 +61,10 @@ pub struct BootSpec {
     /// What the network peer serves over TFTP, as `--tftp` takes it (a
     /// directory or a URL), or listed file by file like a card.
     #[serde(default)]
-    pub tftp: Option<MediumSpec>,
+    pub tftp: Option<NetRootSpec>,
     /// What the network peer serves over HTTP (`--http`).
     #[serde(default)]
-    pub http: Option<MediumSpec>,
+    pub http: Option<NetRootSpec>,
     #[serde(default)]
     pub boot_order: Option<String>,
     #[serde(default)]
@@ -110,12 +112,12 @@ pub struct BootSpec {
 }
 
 /// A boot medium: a disk image, a directory or a URL as `boot --sd` takes them,
-/// or the files of a boot partition listed here, which become the card.
+/// or a disk built out of the partitions listed here.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MediumSpec {
     Path(String),
-    Files(CardFiles),
+    Partitions(PartitionsSpec),
 }
 
 impl From<&str> for MediumSpec {
@@ -124,40 +126,21 @@ impl From<&str> for MediumSpec {
     }
 }
 
+/// What the network peer serves: a directory or a URL as `boot --tftp` takes
+/// them, or the files listed here.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum NetRootSpec {
+    Path(String),
+    Files(CardFiles),
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CardFiles {
-    /// File name on the card (a `/` makes a directory) and where it comes from.
+    /// File name in the tree served (a `/` makes a directory) and where it
+    /// comes from.
     pub files: std::collections::BTreeMap<String, FileSpec>,
-}
-
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum FileSpec {
-    /// A file, relative to the scenario, or a URL.
-    From(String),
-    Inline {
-        /// The text of the file.
-        inline: String,
-    },
-    Builtin {
-        /// A file `pimu` carries: `halt` is the kernel that parks the ARM.
-        builtin: Builtin,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum Builtin {
-    Halt,
-}
-
-impl Builtin {
-    fn bytes(self) -> &'static [u8] {
-        match self {
-            Builtin::Halt => &crate::firmware::HALT_KERNEL,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -414,36 +397,61 @@ impl BootScenario {
     /// A medium or key as `boot` takes it: a URL as it is, a path relative to
     /// the scenario file.
     fn resolve(&self, p: &str) -> PathBuf {
-        if is_url(p) {
+        if is_url(p) || p.starts_with(PARTITIONS_PREFIX) {
             PathBuf::from(p)
         } else {
             self.base_dir.join(p)
         }
     }
 
-    /// Build the cards the scenario lists file by file under `dir`, one
-    /// directory each, and have the scenario name those directories instead.
+    /// Build what the scenario lists instead of naming: the disks of
+    /// `partitions` become a file each under `dir` that `boot` takes as
+    /// `partitions:<file>`, and the trees of `files` a directory each.
     /// A file is copied, fetched into the cache or written out, so what `boot`
-    /// is handed is the directory of a boot partition it already takes.
+    /// is handed is something it already takes.
     pub fn stage(&mut self, dir: &Path) -> Result<()> {
         let base = self.base_dir.clone();
         for (name, medium) in [
             ("sd", &mut self.boot.sd),
             ("usb", &mut self.boot.usb),
             ("otg", &mut self.boot.otg),
-            ("tftp", &mut self.boot.tftp),
-            ("http", &mut self.boot.http),
         ] {
-            let Some(MediumSpec::Files(card)) = medium.as_ref() else {
+            let Some(MediumSpec::Partitions(spec)) = medium.as_ref() else {
                 continue;
             };
-            let card_dir = dir.join(name);
-            if card_dir.exists() {
-                std::fs::remove_dir_all(&card_dir)
-                    .with_context(|| format!("clearing {}", card_dir.display()))?;
+            let mut spec = spec.clone();
+            for part in &mut spec.partitions {
+                for source in part.files.values_mut() {
+                    if let FileSpec::From(from) = source {
+                        if !is_url(from) {
+                            let path = std::path::absolute(base.join(&*from))
+                                .with_context(|| format!("resolving {from}"))?;
+                            *from = path.display().to_string();
+                        }
+                    }
+                }
             }
-            for (file, source) in &card.files {
-                let to = card_dir.join(file);
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+            let file = std::path::absolute(dir.join(format!("{name}.partitions.yaml")))
+                .with_context(|| format!("resolving {}", dir.display()))?;
+            std::fs::write(&file, yaml_serde::to_string(&spec)?)
+                .with_context(|| format!("writing {}", file.display()))?;
+            *medium = Some(MediumSpec::Path(format!(
+                "{PARTITIONS_PREFIX}{}",
+                file.display()
+            )));
+        }
+        for (name, root) in [("tftp", &mut self.boot.tftp), ("http", &mut self.boot.http)] {
+            let Some(NetRootSpec::Files(tree)) = root.as_ref() else {
+                continue;
+            };
+            let tree_dir = dir.join(name);
+            if tree_dir.exists() {
+                std::fs::remove_dir_all(&tree_dir)
+                    .with_context(|| format!("clearing {}", tree_dir.display()))?;
+            }
+            for (file, source) in &tree.files {
+                let to = tree_dir.join(file);
                 if let Some(parent) = to.parent() {
                     std::fs::create_dir_all(parent)
                         .with_context(|| format!("creating {}", parent.display()))?;
@@ -464,9 +472,9 @@ impl BootScenario {
                 };
                 std::fs::write(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
             }
-            let staged = std::path::absolute(&card_dir)
-                .with_context(|| format!("resolving {}", card_dir.display()))?;
-            *medium = Some(MediumSpec::Path(staged.display().to_string()));
+            let staged = std::path::absolute(&tree_dir)
+                .with_context(|| format!("resolving {}", tree_dir.display()))?;
+            *root = Some(NetRootSpec::Path(staged.display().to_string()));
         }
         Ok(())
     }
@@ -478,7 +486,7 @@ impl BootScenario {
     pub fn sd_path(&self) -> Option<PathBuf> {
         match self.boot.sd.as_ref()? {
             MediumSpec::Path(p) => Some(self.resolve(p)),
-            MediumSpec::Files(_) => None,
+            MediumSpec::Partitions(_) => None,
         }
     }
 
@@ -505,8 +513,10 @@ impl BootScenario {
         for spec in [&b.sd, &b.usb, &b.otg].into_iter().flatten() {
             let img = match spec {
                 MediumSpec::Path(img) => img,
-                MediumSpec::Files(card) => {
-                    v.extend(self.file_inputs(card));
+                MediumSpec::Partitions(disk) => {
+                    for part in &disk.partitions {
+                        v.extend(self.file_inputs(&part.files));
+                    }
                     continue;
                 }
             };
@@ -549,11 +559,11 @@ impl BootScenario {
                             && scripts/make-netboot.sh firmware/sd-halt.img";
         for root in [&b.tftp, &b.http] {
             match root {
-                Some(MediumSpec::Path(p)) => v.push(BootInput {
+                Some(NetRootSpec::Path(p)) => v.push(BootInput {
                     path: self.resolve(p),
                     make: make_netboot.into(),
                 }),
-                Some(MediumSpec::Files(card)) => v.extend(self.file_inputs(card)),
+                Some(NetRootSpec::Files(tree)) => v.extend(self.file_inputs(&tree.files)),
                 None => {}
             }
         }
@@ -566,9 +576,9 @@ impl BootScenario {
         v
     }
 
-    /// The local files a listed card or tree reads.
-    fn file_inputs(&self, card: &CardFiles) -> Vec<BootInput> {
-        card.files
+    /// The local files a listed partition or tree reads.
+    fn file_inputs(&self, files: &std::collections::BTreeMap<String, FileSpec>) -> Vec<BootInput> {
+        files
             .values()
             .filter_map(|source| match source {
                 FileSpec::From(from) if !is_url(from) => Some(BootInput {
@@ -603,19 +613,25 @@ impl BootScenario {
             "--verbose".into(),
         ];
         let b = &self.boot;
-        for (flag, medium) in [
-            ("--sd", &b.sd),
-            ("--usb", &b.usb),
-            ("--otg", &b.otg),
-            ("--tftp", &b.tftp),
-            ("--http", &b.http),
-        ] {
+        for (flag, medium) in [("--sd", &b.sd), ("--usb", &b.usb), ("--otg", &b.otg)] {
             match medium {
                 Some(MediumSpec::Path(p)) => {
                     args.push(flag.into());
                     args.push(self.resolve(p).display().to_string());
                 }
-                Some(MediumSpec::Files(_)) => {
+                Some(MediumSpec::Partitions(_)) => {
+                    panic!("{flag}: listed partitions are staged before the boot's arguments")
+                }
+                None => {}
+            }
+        }
+        for (flag, root) in [("--tftp", &b.tftp), ("--http", &b.http)] {
+            match root {
+                Some(NetRootSpec::Path(p)) => {
+                    args.push(flag.into());
+                    args.push(self.resolve(p).display().to_string());
+                }
+                Some(NetRootSpec::Files(_)) => {
                     panic!("{flag}: listed files are staged before the boot's arguments")
                 }
                 None => {}
@@ -1385,11 +1401,17 @@ boot:
   eeprom: e
   wall_secs: 1
   otg:
-    files:
-      start4.elf: part.bin
-      config.txt: { inline: \"arm_64bit=1\\n\" }
-      kernel8.img: { builtin: halt }
-      overlays/x.dtbo: part.bin
+    partitions:
+      - type: esp
+        format: vfat
+        files:
+          start4.elf: part.bin
+          config.txt: { inline: \"arm_64bit=1\\n\" }
+          kernel8.img: { builtin: halt }
+          overlays/x.dtbo: part.bin
+      - type: root
+        format: ext4
+        size: 64M
   sd: card.img
   tftp:
     files:
@@ -1397,7 +1419,7 @@ boot:
 ";
 
     #[test]
-    fn a_card_of_listed_files_is_staged_into_a_directory_and_named_by_it() {
+    fn listed_partitions_are_staged_into_a_file_and_a_tree_into_a_directory() {
         let dir = std::env::temp_dir().join(format!("pimu-stage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1411,29 +1433,40 @@ boot:
         );
 
         scn.stage(&dir.join("cards")).expect("stage");
-        let card = dir.join("cards/otg");
-        assert_eq!(std::fs::read(card.join("start4.elf")).unwrap(), b"ELF");
-        assert_eq!(std::fs::read(card.join("overlays/x.dtbo")).unwrap(), b"ELF");
+        let listing = dir.join("cards/otg.partitions.yaml");
+        let (disk, base) = PartitionsSpec::load(&listing).expect("the staged listing loads");
+        assert_eq!(disk.partitions.len(), 2);
+        let card = disk.card(&base).expect("the staged disk builds");
+        assert!(card.blocks > 0);
         assert_eq!(
-            std::fs::read_to_string(card.join("config.txt")).unwrap(),
-            "arm_64bit=1\n"
-        );
-        assert_eq!(
-            std::fs::read(card.join("kernel8.img")).unwrap(),
-            crate::firmware::HALT_KERNEL
+            std::fs::read(dir.join("cards/tftp/serial/start4.elf")).unwrap(),
+            b"ELF"
         );
         let args = scn.boot_args(Path::new("c")).join(" ");
         assert!(
-            args.contains(&format!("--otg {}", card.display())),
+            args.contains(&format!("--otg partitions:{}", listing.display())),
             "{args}"
         );
         assert!(args.contains("--sd "), "{args}");
+        assert!(
+            args.contains(&format!("--tftp {}", dir.join("cards/tftp").display())),
+            "{args}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn a_listed_file_needs_a_source() {
         let bad = CARD_SCENARIO.replace("{ builtin: halt }", "{ builtn: halt }");
+        assert!(yaml_serde::from_str::<BootScenario>(&bad).is_err());
+    }
+
+    #[test]
+    fn files_directly_under_a_disk_are_refused() {
+        let bad = CARD_SCENARIO.replace(
+            "  otg:\n    partitions:",
+            "  otg:\n    files:\n      a: b\n    partitions:",
+        );
         assert!(yaml_serde::from_str::<BootScenario>(&bad).is_err());
     }
 }

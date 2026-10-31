@@ -146,6 +146,10 @@ MEDIA AND NETWORK:
               such a directory. Read on demand either way; writes stay in
               memory, and the boot after a firmware reset starts from the
               medium again. Mutually exclusive with --emmc, the same host.
+              `partitions:<file>` builds a GPT disk out of a YAML file of
+              partitions (`type`, `format`, `files`) instead; the paths in it
+              are relative to the file (docs/running.md). --usb, --otg and
+              --emmc take the same.
     --check-coherency
               Report every read of memory the VPU wrote through a cached alias
               (`0x0`, `0x4000_0000`, `0x8000_0000`) and did not flush, and
@@ -557,12 +561,18 @@ struct BootOpts {
 enum Medium {
     Image(PathBuf),
     Files(PathBuf),
+    /// A YAML file of partitions, as `partitions:<file>`: a GPT disk built
+    /// from them ([`pimu::layout`]).
+    Partitions(PathBuf),
     RemoteImage(String),
     RemoteFiles(String),
 }
 
 impl Medium {
     fn from_arg(s: &str) -> Medium {
+        if let Some(file) = s.strip_prefix(pimu::layout::PARTITIONS_PREFIX) {
+            return Medium::Partitions(PathBuf::from(file));
+        }
         match pimu::remote::is_url(s) {
             true if s.ends_with('/') => Medium::RemoteFiles(s.to_string()),
             true => Medium::RemoteImage(s.to_string()),
@@ -617,6 +627,15 @@ impl Medium {
                 );
                 pimu::periph::disk::Disk::remote(url.clone(), probe.len, min_bytes)?
             }
+            Medium::Partitions(file) => {
+                let (spec, base) = pimu::layout::PartitionsSpec::load(file)?;
+                let card = spec
+                    .card(&base)
+                    .with_context(|| format!("building a disk out of {self}"))?;
+                pimu::periph::disk::Disk::from_card(card)
+                    .with_context(|| format!("opening the partitions in {self}"))?
+                    .with_capacity(min_bytes)
+            }
             Medium::Files(_) | Medium::RemoteFiles(_) => {
                 let card = self
                     .card(edits)
@@ -647,6 +666,9 @@ impl std::fmt::Display for Medium {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Medium::Image(path) | Medium::Files(path) => write!(f, "{}", path.display()),
+            Medium::Partitions(file) => {
+                write!(f, "{}{}", pimu::layout::PARTITIONS_PREFIX, file.display())
+            }
             Medium::RemoteImage(url) | Medium::RemoteFiles(url) => write!(f, "{url}"),
         }
     }

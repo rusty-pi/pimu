@@ -209,22 +209,53 @@ golden:                          # optional: diff the whole console against this
   ran, which is exact for one build of the model and one firmware, so a firmware
   that changes often leaves it `false`. With no `golden` only the milestones
   judge the run.
-- **A card is a disk image, a directory, a URL — or a list of files.** `sd`,
-  `usb` and `otg` take what `--sd` takes, or `files:`, which builds the boot
-  partition from the files named, so a scenario needs no image built beforehand:
+- **A card is a disk image, a directory, a URL — or a list of partitions.**
+  `sd`, `usb` and `otg` take what `--sd` takes, or `partitions:`, which builds a
+  GPT disk after [`systemd-repart`](https://www.freedesktop.org/software/systemd/man/latest/repart.d.html),
+  so a scenario needs no image built beforehand:
 
   ```yaml
-  otg:
-    files:
-      start4.elf: "../out/start4.elf"             # a path, relative to the scenario
-      bcm2711-rpi-4-b.dtb: "https://example.org/bcm2711-rpi-4-b.dtb"   # or a URL, cached
-      config.txt: { inline: "arm_64bit=1\nuart_2ndstage=1\n" }
-      kernel8.img: { builtin: halt }              # a kernel that parks the ARM
-      overlays/x.dtbo: "../x.dtbo"                # a `/` makes a directory
+  sd:
+    partitions:
+      - type: esp                                   # the boot partition
+        format: vfat
+        files:
+          start4.elf: "../out/start4.elf"           # a path, relative to the scenario
+          bcm2711-rpi-4-b.dtb: "https://example.org/bcm2711-rpi-4-b.dtb"   # or a URL
+          config.txt: { inline: "arm_64bit=1\nuart_2ndstage=1\n" }
+          kernel8.img: { builtin: halt }            # a kernel that parks the ARM
+          overlays/x.dtbo: "../x.dtbo"              # a `/` makes a directory
+      - type: root
+        format: ext4
+        size: 256M                                  # at least this long
+        files:
+          etc/hostname: { inline: "pimu\n" }
   ```
 
-  The files are copied to `<log>.cards/<medium>/` and booted as a directory.
-  `tftp` and `http` take the same `files:` for what the peer serves.
+  `type` is `esp`, `root`, `usr`, `usr-verity` or `usr-verity-sig` (the
+  `-arm64` GUIDs for the last four) and `format` is `vfat` or `ext4`; a
+  partition with no `format` is zeros and needs a `size`. `label` names the
+  partition in the GPT. The partitions lie in order, aligned to 1 MiB, with
+  the primary and backup tables around them; GUIDs derive from the
+  description, so the same one always builds the same disk. A key `systemd-repart`
+  has and this does not (`copy-files`, `uuid`, ...) is an error, not ignored.
+
+  Nothing is written out: only the tables and the filesystems' metadata are
+  made, and each file is read from its source as the guest asks for it. An
+  `ext4` volume has 4 KiB blocks, no journal and no checksums, and a file
+  from the host keeps its permission bits; other files are `0644`. A Pi 4 or
+  later bootloader reads a GPT; the boot partition is the first.
+
+  `boot --sd partitions:<file>` takes the same list from a YAML file, as
+  `partitions:` at its top. `tftp` and `http` are not disks, and take
+  `files:` for what the peer serves, in the same form:
+
+  ```yaml
+  tftp:
+    files:
+      serial/start4.elf: "../out/start4.elf"
+  ```
+
   `uart_2ndstage=1` is what makes `start4.elf` print on the UART, so a
   milestone can match what it says. The `halt` kernel is the one `scripts/make-sd.sh` uses for
   `KERNEL=halt`; a boot that ends at the handover needs nothing more of the ARM.
