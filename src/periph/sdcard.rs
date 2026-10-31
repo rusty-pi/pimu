@@ -237,7 +237,10 @@ pub struct Kept {
 
 impl SdCard {
     pub fn into_kept(self) -> Kept {
-        Kept { disk: self.disk, kind: self.kind }
+        Kept {
+            disk: self.disk,
+            kind: self.kind,
+        }
     }
 
     pub fn from_kept(kept: Kept) -> SdCard {

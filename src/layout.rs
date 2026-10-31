@@ -405,7 +405,12 @@ impl PartitionSpec {
             let blocks = len.div_ceil(BLOCK_SIZE as u64);
             return Ok(Volume {
                 meta: Vec::new(),
-                extents: vec![Extent { lba: 0, blocks, source, len }],
+                extents: vec![Extent {
+                    lba: 0,
+                    blocks,
+                    source,
+                    len,
+                }],
                 sectors: blocks.max(min_sectors),
             });
         };
@@ -629,7 +634,10 @@ mod tests {
     #[test]
     fn a_type_can_be_any_guid() {
         let s = spec("partitions:\n  - type: 0ca9cdc0-6c28-49a6-a041-eeec6123df3a\n    size: 1M\n");
-        assert_eq!(s.partitions[0].kind.guid(), "0ca9cdc0-6c28-49a6-a041-eeec6123df3a");
+        assert_eq!(
+            s.partitions[0].kind.guid(),
+            "0ca9cdc0-6c28-49a6-a041-eeec6123df3a"
+        );
         let card = s.card(Path::new(".")).unwrap();
         assert_eq!(
             &card.meta[2 * BLOCK_SIZE..][..16],
@@ -662,16 +670,29 @@ mod tests {
             u64::from_le_bytes(entries[32..40].try_into().unwrap()),
             u64::from_le_bytes(entries[128 + 40..128 + 48].try_into().unwrap()),
         );
-        assert_eq!(first, 2048, "the first partition is where the next 1 MiB is");
+        assert_eq!(
+            first, 2048,
+            "the first partition is where the next 1 MiB is"
+        );
         assert_eq!(
             u64::from_le_bytes(entries[128 + 32..128 + 40].try_into().unwrap()),
             1024
         );
-        assert_eq!(last, 2047, "the window ends where the first partition starts");
-        let raw = card.extents.iter().find(|e| e.lba == 1024).expect("the data");
+        assert_eq!(
+            last, 2047,
+            "the window ends where the first partition starts"
+        );
+        let raw = card
+            .extents
+            .iter()
+            .find(|e| e.lba == 1024)
+            .expect("the data");
         assert_eq!(raw.len, 1000);
         for pair in card.extents.windows(2) {
-            assert!(pair[0].lba + pair[0].blocks <= pair[1].lba, "extents overlap");
+            assert!(
+                pair[0].lba + pair[0].blocks <= pair[1].lba,
+                "extents overlap"
+            );
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -31,7 +31,11 @@ impl Carry {
     /// What the first boot starts from: the flash, and the fuses a run before
     /// left, if any.
     pub fn first(flash: Vec<u8>, fuses: Option<BTreeMap<u32, u32>>) -> Carry {
-        Carry { flash, fuses, ..Carry::default() }
+        Carry {
+            flash,
+            fuses,
+            ..Carry::default()
+        }
     }
 
     /// What `machine` leaves: `flash` is its flash with `edits` made again,
