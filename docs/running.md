@@ -240,8 +240,13 @@ golden:                          # optional: diff the whole console against this
   ```
 
   `type` is `esp`, `root`, `usr`, `usr-verity` or `usr-verity-sig` (the
-  `-arm64` GUIDs for the last four) and `format` is `vfat` or `ext4`; a
-  partition with no `format` is zeros and needs a `size`. `label` names the
+  `-arm64` GUIDs for the last four), or any other partition type by its GUID,
+  and `format` is `vfat` or `ext4`; a partition with no `format` is zeros and
+  needs a `size`, or holds `data`, a file (a path, a URL or `inline`) that it
+  starts with. `start` puts a partition where it says, in bytes or with a unit,
+  rather than at the next 1 MiB, as long as it lies clear of the others and of
+  the tables: a firmware's data in the gap before the first partition is
+  `type: <guid>`, `start: 512K`, `size: 512K`, `data: <file>`. `label` names the
   partition in the GPT. The partitions lie in order, aligned to 1 MiB, with
   the primary and backup tables around them; GUIDs derive from the
   description, so the same one always builds the same disk. A key `systemd-repart`

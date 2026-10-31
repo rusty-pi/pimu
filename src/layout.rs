@@ -49,7 +49,7 @@ pub struct PartitionSpec {
     /// What the partition is for, which is the GUID the GPT names it by (the
     /// ones for the architecture of the board: `root` is `root-arm64`).
     #[serde(rename = "type")]
-    pub kind: PartitionType,
+    pub kind: PartitionKind,
     /// The filesystem to make in the partition. Without one it is zeros, and
     /// `size` says how long.
     #[serde(default)]
@@ -66,6 +66,60 @@ pub struct PartitionSpec {
     /// comes from.
     #[serde(default)]
     pub files: BTreeMap<String, FileSpec>,
+    /// Where the partition starts, in bytes or with a unit, in place of the
+    /// next 1 MiB after the ones before it. It lies clear of all of them, and
+    /// of the tables.
+    #[serde(default)]
+    pub start: Option<Size>,
+    /// What a partition with no `format` holds, in place of zeros: a file (a
+    /// path, a URL or `inline`), read as the guest asks for it.
+    #[serde(default)]
+    pub data: Option<FileSpec>,
+}
+
+/// What a partition is for: one of the types below, or any other type by its
+/// GUID.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PartitionKind {
+    Known(PartitionType),
+    Guid(Guid),
+}
+
+impl PartitionKind {
+    fn guid(&self) -> String {
+        match self {
+            PartitionKind::Known(known) => known.guid().to_string(),
+            PartitionKind::Guid(Guid(text)) => text.to_ascii_lowercase(),
+        }
+    }
+}
+
+/// A GUID as text: `8-4-4-4-12` hexadecimal digits.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(try_from = "String")]
+#[schemars(with = "String")]
+pub struct Guid(String);
+
+impl TryFrom<String> for Guid {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Guid, String> {
+        let groups: Vec<&str> = text.split('-').collect();
+        let shape = [8, 4, 4, 4, 12];
+        let fits = groups.len() == shape.len()
+            && groups
+                .iter()
+                .zip(shape)
+                .all(|(g, n)| g.len() == n && g.bytes().all(|b| b.is_ascii_hexdigit()));
+        if fits {
+            Ok(Guid(text))
+        } else {
+            Err(format!(
+                "{text:?} is neither a partition type (esp, root, usr, usr-verity, usr-verity-sig) nor a GUID"
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -257,23 +311,44 @@ impl PartitionsSpec {
             );
         }
         let mut extents = Vec::new();
-        let mut placed = Vec::new();
+        let mut placed: Vec<(u64, u64)> = Vec::new();
         let mut next = ALIGN;
         for (i, part) in self.partitions.iter().enumerate() {
+            let at = match &part.start {
+                Some(start) => {
+                    let bytes = start.bytes()?;
+                    if bytes % BLOCK_SIZE as u64 != 0 {
+                        bail!("partition {}: `start` is not a multiple of 512", i + 1);
+                    }
+                    bytes / BLOCK_SIZE as u64
+                }
+                None => next,
+            };
             let volume = part
-                .volume(next, base)
+                .volume(at, base)
                 .with_context(|| format!("partition {} ({:?})", i + 1, part.kind))?;
             let sectors = volume.sectors.next_multiple_of(8);
+            if at < FIRST_USABLE {
+                bail!("partition {}: starts in the tables", i + 1);
+            }
+            if let Some((j, _)) = placed
+                .iter()
+                .enumerate()
+                .find(|(_, &(start, len))| at < start + len && start < at + sectors)
+            {
+                bail!("partition {} overlaps partition {}", i + 1, j + 1);
+            }
             if !volume.meta.is_empty() {
-                extents.push(bytes_at(next, volume.meta));
+                extents.push(bytes_at(at, volume.meta));
             }
             extents.extend(volume.extents.into_iter().map(|mut e| {
-                e.lba += next;
+                e.lba += at;
                 e
             }));
-            placed.push((next, sectors));
-            next = (next + sectors).next_multiple_of(ALIGN);
+            placed.push((at, sectors));
+            next = next.max((at + sectors).next_multiple_of(ALIGN));
         }
+        extents.sort_by_key(|e| e.lba);
         let total = (next + TABLE_SECTORS + 1).next_multiple_of(1024);
 
         let seed = disk_seed(&self.partitions, &placed);
@@ -316,15 +391,27 @@ impl PartitionSpec {
             if !self.files.is_empty() {
                 bail!("`files` need a `format` to be put in");
             }
-            if min_sectors == 0 {
-                bail!("a partition with no `format` needs a `size`");
-            }
+            let Some(data) = &self.data else {
+                if min_sectors == 0 {
+                    bail!("a partition with no `format` needs a `size`");
+                }
+                return Ok(Volume {
+                    meta: Vec::new(),
+                    extents: Vec::new(),
+                    sectors: min_sectors,
+                });
+            };
+            let (source, len) = data.source(base)?;
+            let blocks = len.div_ceil(BLOCK_SIZE as u64);
             return Ok(Volume {
                 meta: Vec::new(),
-                extents: Vec::new(),
-                sectors: min_sectors,
+                extents: vec![Extent { lba: 0, blocks, source, len }],
+                sectors: blocks.max(min_sectors),
             });
         };
+        if self.data.is_some() {
+            bail!("`data` is for a partition with no `format`");
+        }
         let entries = entries_of_files(&self.files, base)?;
         match format {
             Format::Vfat => {
@@ -391,7 +478,7 @@ fn entry_table(parts: &[PartitionSpec], placed: &[(u64, u64)], seed: &[u8; 20]) 
     let mut table = vec![0u8; (ENTRIES * ENTRY_BYTES) as usize];
     for (i, (part, (start, sectors))) in parts.iter().zip(placed).enumerate() {
         let e = &mut table[i * ENTRY_BYTES as usize..(i + 1) * ENTRY_BYTES as usize];
-        e[0..16].copy_from_slice(&guid_bytes(part.kind.guid()));
+        e[0..16].copy_from_slice(&guid_bytes(&part.kind.guid()));
         e[16..32].copy_from_slice(&derived_guid(seed, i as u8 + 1));
         e[32..40].copy_from_slice(&start.to_le_bytes());
         e[40..48].copy_from_slice(&(start + sectors - 1).to_le_bytes());
@@ -537,6 +624,86 @@ mod tests {
                 "extents overlap"
             );
         }
+    }
+
+    #[test]
+    fn a_type_can_be_any_guid() {
+        let s = spec("partitions:\n  - type: 0ca9cdc0-6c28-49a6-a041-eeec6123df3a\n    size: 1M\n");
+        assert_eq!(s.partitions[0].kind.guid(), "0ca9cdc0-6c28-49a6-a041-eeec6123df3a");
+        let card = s.card(Path::new(".")).unwrap();
+        assert_eq!(
+            &card.meta[2 * BLOCK_SIZE..][..16],
+            &guid_bytes("0ca9cdc0-6c28-49a6-a041-eeec6123df3a")
+        );
+        let bad = "partitions:\n  - type: 0ca9cdc0-6c28-49a6-a041\n    size: 1M\n";
+        assert!(yaml_serde::from_str::<PartitionsSpec>(bad).is_err());
+    }
+
+    #[test]
+    fn a_partition_can_start_where_it_is_told_and_hold_a_file() {
+        let dir = std::env::temp_dir().join(format!("pimu-layout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("window.bin"), vec![0x5a; 1000]).unwrap();
+        let s = spec(
+            "partitions:
+  - type: esp
+    format: vfat
+    files:
+      a: { inline: x }
+  - type: 0ca9cdc0-6c28-49a6-a041-eeec6123df3a
+    start: 512K
+    size: 512K
+    data: window.bin
+",
+        );
+        let card = s.card(&dir).unwrap();
+        let entries = &card.meta[2 * BLOCK_SIZE..];
+        let (first, last) = (
+            u64::from_le_bytes(entries[32..40].try_into().unwrap()),
+            u64::from_le_bytes(entries[128 + 40..128 + 48].try_into().unwrap()),
+        );
+        assert_eq!(first, 2048, "the first partition is where the next 1 MiB is");
+        assert_eq!(
+            u64::from_le_bytes(entries[128 + 32..128 + 40].try_into().unwrap()),
+            1024
+        );
+        assert_eq!(last, 2047, "the window ends where the first partition starts");
+        let raw = card.extents.iter().find(|e| e.lba == 1024).expect("the data");
+        assert_eq!(raw.len, 1000);
+        for pair in card.extents.windows(2) {
+            assert!(pair[0].lba + pair[0].blocks <= pair[1].lba, "extents overlap");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn partitions_that_overlap_or_lie_in_the_tables_are_refused() {
+        let over = spec(
+            "partitions:
+  - type: usr-verity
+    size: 2M
+  - type: usr-verity-sig
+    size: 1M
+    start: 1536K
+",
+        );
+        assert!(over.card(Path::new(".")).is_err());
+        let tables = spec("partitions:\n  - type: usr-verity\n    size: 1M\n    start: 4K\n");
+        assert!(tables.card(Path::new(".")).is_err());
+        let odd = spec("partitions:\n  - type: usr-verity\n    size: 1M\n    start: 1001\n");
+        assert!(odd.card(Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn data_is_for_a_partition_with_no_filesystem() {
+        let s = spec(
+            "partitions:
+  - type: root
+    format: ext4
+    data: { inline: x }
+",
+        );
+        assert!(s.card(Path::new(".")).is_err());
     }
 
     #[test]

@@ -258,6 +258,10 @@
       ],
       "type": "object"
     },
+    "Guid": {
+      "description": "A GUID as text: `8-4-4-4-12` hexadecimal digits.",
+      "type": "string"
+    },
     "MediumSpec": {
       "anyOf": [
         {
@@ -320,9 +324,32 @@
       ],
       "description": "What the network peer serves: a directory or a URL as `boot --tftp` takes\nthem, or the files listed here."
     },
+    "PartitionKind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PartitionType"
+        },
+        {
+          "$ref": "#/$defs/Guid"
+        }
+      ],
+      "description": "What a partition is for: one of the types below, or any other type by its\nGUID."
+    },
     "PartitionSpec": {
       "additionalProperties": false,
       "properties": {
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What a partition with no `format` holds, in place of zeros: a file (a\npath, a URL or `inline`), read as the guest asks for it."
+        },
         "files": {
           "additionalProperties": {
             "$ref": "#/$defs/FileSpec"
@@ -363,8 +390,20 @@
           "default": null,
           "description": "At least this long, in bytes or with a `K`, `M`, `G` or `T` (powers of\n1024). A filesystem is as long as its files need, with some room to\nspare, if this is less."
         },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Size"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the partition starts, in bytes or with a unit, in place of the\nnext 1 MiB after the ones before it. It lies clear of all of them, and\nof the tables."
+        },
         "type": {
-          "$ref": "#/$defs/PartitionType",
+          "$ref": "#/$defs/PartitionKind",
           "description": "What the partition is for, which is the GUID the GPT names it by (the\nones for the architecture of the board: `root` is `root-arm64`)."
         }
       },
