@@ -171,6 +171,13 @@ The packet goes out once in the whole run, not once per boot. A reset rebuilds
 the machine and looks for `--until` and `--send-after` again, but not for this, so
 the boot after a wake sees no second packet.
 
+A reset rebuilds the machine and carries over what a real board keeps: the
+flash as the self-update wrote it, the fuses, the pins of the GPIO expander, the
+DRAM and the card or e-MMC with what the guest wrote to it. The USB sticks are the
+same disks across the reset. The image or directory behind a card is never
+written, so the next run starts from it again. The command line and the browser
+build carry a machine over with the same code.
+
 ## Checking a boot: `--scenario`
 
 A scenario is a YAML file that says what to boot and what the run has to show.

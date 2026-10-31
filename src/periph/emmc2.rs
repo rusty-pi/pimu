@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use crate::bus::{BusResult, MmioDevice, Width};
 use crate::log::{Channel, Log};
 use crate::mem::Ram;
-use crate::periph::sdcard::SdCard;
+use crate::periph::sdcard::{Kept, SdCard};
 
 // The read-only identity, the idle `PRESENT_STATE` and `HOST_CONTROL.FIXED`
 // are measured on a Raspberry Pi 4B d03115.
@@ -376,6 +376,16 @@ impl Emmc2 {
     /// The slot itself, for a snapshot ([`crate::snap`]).
     pub fn card_slot(&mut self) -> &mut Option<SdCard> {
         &mut self.card
+    }
+
+    /// What the card keeps across a reset ([`Kept`]), taken out of the slot.
+    pub fn keep_card(&mut self) -> Option<Kept> {
+        self.card.take().map(SdCard::into_kept)
+    }
+
+    /// Put a kept card back, in place of the one the new machine was built with.
+    pub fn restore_card(&mut self, kept: Kept) {
+        self.card = crate::snap::Keep(Some(SdCard::from_kept(kept)));
     }
 
     pub fn take_card(&mut self) -> Option<SdCard> {

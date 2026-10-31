@@ -227,7 +227,23 @@ pub struct SdCard {
     io_xfer: Option<IoXfer>,
 }
 
+/// What a card keeps across a reset of the board: its disk, with what the
+/// guest wrote to it, and what sort of card it is. The rest of it starts over,
+/// as a card does when the board powers it off.
+pub struct Kept {
+    disk: Disk,
+    kind: CardKind,
+}
+
 impl SdCard {
+    pub fn into_kept(self) -> Kept {
+        Kept { disk: self.disk, kind: self.kind }
+    }
+
+    pub fn from_kept(kept: Kept) -> SdCard {
+        SdCard::with_disk_kind(kept.disk, kept.kind)
+    }
+
     pub fn new(mut image: Vec<u8>) -> SdCard {
         if !image.len().is_multiple_of(512) {
             image.resize(image.len().next_multiple_of(512), 0);

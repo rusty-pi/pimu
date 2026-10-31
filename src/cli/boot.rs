@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
 
-use pimu::boot::{boot_outcome, locate_fdt, CardEdits, FlashEdits};
+use pimu::boot::{boot_outcome, locate_fdt, CardEdits, Carry, FlashEdits};
 use pimu::emulator::{Emulator, RunLimits, RunReport};
 use pimu::firmware::Payload;
 use pimu::harness;
@@ -144,8 +144,8 @@ MEDIA AND NETWORK:
               asks for them. What `git clone
               https://github.com/raspberrypi/firmware` leaves in `boot/` is
               such a directory. Read on demand either way; writes stay in
-              memory, and the boot after a firmware reset starts from the
-              medium again. Mutually exclusive with --emmc, the same host.
+              memory and outlive a firmware reset. Mutually exclusive with
+              --emmc, the same host.
               `partitions:<file>` builds a GPT disk out of a YAML file of
               partitions (`type`, `format`, `files`) instead; the paths in it
               are relative to the file (docs/running.md). --usb, --otg and
@@ -1473,32 +1473,15 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
 
     let mut reboots = 0u32;
     // A reset does not blank OTP: each boot starts with the rows the one before programmed.
-    let mut fuses = load_otp(opts, rig.board)?;
+    let mut carry = Carry::first(flash, load_otp(opts, rig.board)?);
     let mut fuses_at_start = None;
-    let mut partition = 0;
-    // Off the SoC: a reset leaves it as the boot before left it.
-    let mut expander = None;
     let mut rebooted_orderly = false;
     // Sent in one boot, it is not owed to the next.
     let mut magic_packet_after = opts.magic_packet_after.clone();
-    // The DRAM keeps its contents through a reset, as a watchdog reset leaves it.
-    let mut kept_ram: Option<pimu::mem::Contents> = None;
     let (report, emu, start) = 'boot: loop {
-        let mut machine = rig.machine(&flash)?;
-        if let Some(ram) = kept_ram.take() {
-            machine.ram.restore_contents(ram);
-        }
-        if let Some(fuses) = &fuses {
-            machine.config_otp.fuse_rows(fuses);
-        }
+        let mut machine = rig.machine(&carry.flash)?;
         // After the file, so `--otp-row` fuses a row whatever the run started from.
-        for &(row, value) in &opts.otp_rows {
-            machine.config_otp.set(row, value);
-        }
-        machine.pm.keep_partition_bits(partition);
-        if let Some(expander) = expander.take() {
-            machine.bsc_pmic.fit_expander(expander);
-        }
+        carry.restore(&mut machine, &opts.otp_rows);
         // One-shot: the bootcode clears it as it reads it.
         if reboots == 0 && opts.tryboot {
             machine.pm.request_tryboot();
@@ -1538,18 +1521,13 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         } else {
             report
         };
-        rig.dump_segment(&emu, &flash, reboots);
+        rig.dump_segment(&emu, &carry.flash, reboots);
 
         if report.end == pimu::emulator::RunEnd::Reset {
             reboots += 1;
             if !opts.quiet && (opts.verbose || !report.console_streamed) {
                 print!("{}", String::from_utf8_lossy(&report.console));
             }
-            flash = emu.machine.spi0.flash_bytes().to_vec();
-            edits.apply(&mut flash, false); // self-update restored SIGNED_BOOT=1
-            fuses = Some(emu.machine.config_otp.fuses().clone());
-            partition = emu.machine.pm.partition_bits();
-            expander = emu.machine.bsc_pmic.expander().cloned();
             if reboots <= 4 {
                 // The next boot's ARM side starts a profile of its own.
                 if let Some(a) = &mut emu.arm {
@@ -1560,13 +1538,14 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
                     }
                 }
                 println!("\n=== RESET (reboot {reboots}) — re-running from updated flash ===");
-                if expander.as_ref().is_some_and(|x| !x.sd_powered()) {
+                // The flash with the self-update's change to `SIGNED_BOOT` made again.
+                carry = Carry::leave(&mut emu.machine, &edits);
+                if carry.expander().is_some_and(|x| !x.sd_powered()) {
                     println!(
                         "expander: SD_PWR_ON is driven low across the reset, the card has no power"
                     );
                 }
                 println!();
-                kept_ram = Some(emu.machine.ram.take_contents());
                 continue 'boot;
             }
             println!("\n=== RESET (reboot {reboots}) — giving up after 4 reboots ===");
@@ -1937,8 +1916,8 @@ impl<'a> Rig<'a> {
         if eeprom {
             machine.spi0.attach_flash(flash.to_vec())?;
         }
-        // The card reads its image or its files on demand; each boot after a
-        // reset starts from them again, writes forgotten.
+        // The card reads its image or its files on demand. After a reset
+        // `Carry::restore` puts the card of the boot before in its place.
         if let Some(sd) = &sd {
             let disk = sd.disk(&self.opts.card_edits, 0, &self.log, "sd")?;
             machine.emmc2.insert_disk(disk);

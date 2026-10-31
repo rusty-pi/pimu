@@ -114,8 +114,8 @@ is the current list of what the model covers, with provenance per register.
 What isn't a spec'd register block:
 
 - **Storage** — the SD card and the USB stick are disk images read on demand.
-  Writes stay in memory and the image file is never modified, so every run is
-  a first boot; `--usb-mb` makes the stick bigger than its image.
+  Writes stay in memory, and survive a firmware reset, and the image file is
+  never modified, so every run is a first boot; `--usb-mb` makes the stick bigger than its image.
   `--usb <img>` puts the stick in blue socket A, on the VL805; `--otg <img>`
   puts it in the USB-C socket, on the BCM2711's own xHCI, which is what
   `BOOT_ORDER` digit `0x5` (`BCM-USB-MSD`) boots from and what `otg_mode=1` in

@@ -6,7 +6,6 @@
 //! `--scenario` limits). What both share lives in [`crate::boot`].
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
@@ -15,14 +14,13 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 
-use crate::boot::{boot_outcome, locate_fdt, CardEdits, FlashEdits};
+use crate::boot::{boot_outcome, locate_fdt, CardEdits, Carry, FlashEdits};
 use crate::emulator::{Emulator, RunEnd, RunLimits};
 use crate::fat::Entry;
 use crate::firmware::bootrom::BootRom;
 use crate::log::{Log, Spec};
 use crate::machine::Machine;
 use crate::periph::disk::Disk;
-use crate::periph::fxl6408::Fxl6408;
 use crate::soc::Board;
 use crate::stdio::{HostEvent, HostInput};
 use crate::vpu::UnimplPolicy;
@@ -42,8 +40,8 @@ const CONSOLE_KEPT: usize = 1 << 20;
 /// Log lines held between two calls to [`Session::take_log`].
 const LOG_KEPT: usize = 8 << 20;
 
-/// Builds a fresh disk for each boot: a card starts from its medium again after
-/// a reset, with what the guest wrote forgotten.
+/// Builds a disk for the first boot. A card keeps what the guest wrote across a
+/// reset ([`Carry`]), so a later boot does not use the one this builds.
 pub type DiskFactory = Box<dyn Fn() -> Disk>;
 
 type SharedDisk = Rc<RefCell<Disk>>;
@@ -100,18 +98,6 @@ impl LogBuffer {
         let line = format!("{{\"us\":0,\"channel\":\"{channel}\",\"msg\":\"{msg}\"}}\n");
         let _ = self.clone().write(line.as_bytes());
     }
-}
-
-/// What the machine carries from one boot into the next: a reset leaves the
-/// flash as the self-update wrote it, the fuses programmed, the expander's
-/// pins, the PM partition bits and the DRAM's contents.
-#[derive(Default)]
-struct Carry {
-    flash: Vec<u8>,
-    fuses: Option<BTreeMap<u32, u32>>,
-    partition: u32,
-    expander: Option<Fxl6408>,
-    ram: Option<crate::mem::Contents>,
 }
 
 struct Rig {
@@ -200,19 +186,7 @@ impl Rig {
             machine.attach_net(Box::new(peer));
         }
 
-        if let Some(ram) = carry.ram.take() {
-            machine.ram.restore_contents(ram);
-        }
-        if let Some(fuses) = &carry.fuses {
-            machine.config_otp.fuse_rows(fuses);
-        }
-        for &(row, value) in &options.otp_rows {
-            machine.config_otp.set(row, value);
-        }
-        machine.pm.keep_partition_bits(carry.partition);
-        if let Some(expander) = carry.expander.take() {
-            machine.bsc_pmic.fit_expander(expander);
-        }
+        carry.restore(&mut machine, &options.otp_rows);
         if reboots == 0 && options.tryboot {
             machine.pm.request_tryboot();
         }
@@ -343,10 +317,7 @@ impl Session {
             usb,
             otg,
         };
-        let mut carry = Carry {
-            flash,
-            ..Carry::default()
-        };
+        let mut carry = Carry::first(flash, None);
         let mut emu = rig.emulator(&mut carry, 0)?;
         emu.stop_at_release = rig.options.snapshot;
         let (host, keys) = HostInput::channel();
@@ -434,16 +405,7 @@ impl Session {
             ));
             return Ok(());
         }
-        let machine = &mut self.emu.machine;
-        let mut flash = machine.spi0.flash_bytes().to_vec();
-        self.rig.flash_edits.apply(&mut flash, false);
-        self.carry = Carry {
-            flash,
-            fuses: Some(machine.config_otp.fuses().clone()),
-            partition: machine.pm.partition_bits(),
-            expander: machine.bsc_pmic.expander().cloned(),
-            ram: Some(machine.ram.take_contents()),
-        };
+        self.carry = Carry::leave(&mut self.emu.machine, &self.rig.flash_edits);
         let host = self.emu.input.host.take();
         self.log
             .note("bench", &format!("reset: reboot {}", self.reboots));

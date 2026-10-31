@@ -3,10 +3,82 @@
 //! files, finding the device tree the firmware handed to the ARM, and judging
 //! whether the run got where it was meant to.
 
+use std::collections::BTreeMap;
+
 use anyhow::{bail, Context, Result};
 
 use crate::armstub::Handoff;
 use crate::machine::Machine;
+use crate::periph::fxl6408::Fxl6408;
+use crate::periph::sdcard::Kept;
+
+/// What a boot leaves for the one after a reset: the flash as the self-update
+/// wrote it, the fuses programmed, the pins of the expander, the PM partition
+/// bits, the DRAM's contents and the card with what the guest wrote to it.
+/// The command line and the browser build both carry a machine over a reset
+/// with this, so that they keep the same things.
+#[derive(Default)]
+pub struct Carry {
+    pub flash: Vec<u8>,
+    pub fuses: Option<BTreeMap<u32, u32>>,
+    partition: u32,
+    expander: Option<Fxl6408>,
+    ram: Option<crate::mem::Contents>,
+    card: Option<Kept>,
+}
+
+impl Carry {
+    /// What the first boot starts from: the flash, and the fuses a run before
+    /// left, if any.
+    pub fn first(flash: Vec<u8>, fuses: Option<BTreeMap<u32, u32>>) -> Carry {
+        Carry { flash, fuses, ..Carry::default() }
+    }
+
+    /// What `machine` leaves: `flash` is its flash with `edits` made again,
+    /// which the self-update undid.
+    pub fn leave(machine: &mut Machine, edits: &FlashEdits) -> Carry {
+        let mut flash = machine.spi0.flash_bytes().to_vec();
+        edits.apply(&mut flash, false);
+        Carry {
+            flash,
+            fuses: Some(machine.config_otp.fuses().clone()),
+            partition: machine.pm.partition_bits(),
+            expander: machine.bsc_pmic.expander().cloned(),
+            ram: Some(machine.ram.take_contents()),
+            card: machine.emmc2.keep_card(),
+        }
+    }
+
+    /// The pins of the expander as the reset left them, which tell whether the
+    /// card had power across it.
+    pub fn expander(&self) -> Option<&Fxl6408> {
+        self.expander.as_ref()
+    }
+
+    /// Give a machine built for the next boot what the last one left. The
+    /// fuses are written first and `otp_rows` over them, so a row the run was
+    /// told to fuse stays fused whatever an earlier boot programmed. The card
+    /// built with the machine is replaced by the one the last boot used, if it
+    /// had one.
+    pub fn restore(&mut self, machine: &mut Machine, otp_rows: &[(u32, u32)]) {
+        if let Some(ram) = self.ram.take() {
+            machine.ram.restore_contents(ram);
+        }
+        if let Some(fuses) = &self.fuses {
+            machine.config_otp.fuse_rows(fuses);
+        }
+        for &(row, value) in otp_rows {
+            machine.config_otp.set(row, value);
+        }
+        machine.pm.keep_partition_bits(self.partition);
+        if let Some(expander) = self.expander.take() {
+            machine.bsc_pmic.fit_expander(expander);
+        }
+        if let Some(card) = self.card.take() {
+            machine.emmc2.restore_card(card);
+        }
+    }
+}
 
 /// What the command line adds to a card built out of files: `config.txt` lines
 /// and a `cmdline.txt`. The files themselves are left alone — the edited ones
