@@ -30,7 +30,16 @@ Ready (`0x06`) or Write Ready (`0x07`) IU when data has to move and, once it
 has, a Sense IU (`0x03`, SCSI status at byte 6, sense data after the 16-byte
 header on CHECK CONDITION). The tag is also the stream ID of everything that
 belongs to the command: the status IUs, the data-in transfer and the data-out
-transfer. Several commands may be in flight under different tags. The SCSI
+transfer. Several commands may be in flight under different tags.
+
+A WRITE gets its Write Ready IU only once a transfer is queued on the data-out
+stream of its tag, as on a UAS stick (`2e8a:0030`) behind the VL805 of a
+Raspberry Pi 4B d03115, which sends none until the host has the data queued. A
+host that waits for the Write Ready IU before it queues the data hears nothing,
+and a data-out transfer queued before the command is NAKed until the command
+arrives. A read's data-in transfer is queued with the command in any case. The
+device does not model the rest of what that stick did after such a timeout
+(later reads went unanswered too): how its recovery failed is not known. The SCSI
 answers are `MassStorage`'s: TEST UNIT READY, INQUIRY, READ CAPACITY(10), the
 READ and WRITE families on the `Disk`, and the rest fail with CHECK CONDITION.
 

@@ -845,9 +845,19 @@ impl Xhci {
     /// Give every NAKed endpoint another go: whatever the host just did may be
     /// what the device was waiting for, and on the wire the controller would
     /// have been retrying the token all along.
+    ///
+    /// One endpoint's progress can be what another waited for (a data-out
+    /// transfer makes a UAS stick send its Write Ready IU), so the round
+    /// repeats until none moved.
     fn run_parked(&mut self, mem: &mut dyn HostMem) {
-        for (slot, dci, stream) in std::mem::take(&mut self.parked) {
-            self.run_transfer_ring(slot, dci, stream, mem);
+        loop {
+            let before = self.transfers;
+            for (slot, dci, stream) in std::mem::take(&mut self.parked) {
+                self.run_transfer_ring(slot, dci, stream, mem);
+            }
+            if self.transfers == before || self.parked.is_empty() {
+                break;
+            }
         }
     }
 
@@ -1418,8 +1428,11 @@ impl Xhci {
 mod tests {
     use super::*;
     use crate::mem::Ram;
+    use crate::periph::disk::Disk;
     use crate::periph::usb::Hub;
     use crate::spec::xhci::{ERDP_LO, ERSTBA_LO, ERSTSZ};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// Ring addresses may sit above 4 GB: nothing may truncate them.
     #[test]
@@ -1889,20 +1902,31 @@ mod tests {
     const COMMAND_IU: u64 = 0xD500;
     const STATUS_IU: u64 = 0xD600;
     const DATA_BUFFER: u64 = 0xE000;
+    const DATA_OUT_ARRAY: u64 = 0xD700;
+    const DATA_OUT_RING: u64 = 0xD800;
+    const DATA_OUT_BUFFER: u64 = 0xF000;
 
     /// A UAS stick on root port 1, switched to its UAS setting, with the four
     /// pipes' endpoint contexts written by hand: command on DCI 2, status on
-    /// DCI 5 and data-in on DCI 7, the last two with four streams of which
-    /// only stream 1 is enabled.
+    /// DCI 5, data-in on DCI 7 and data-out on DCI 8, the last three with four
+    /// streams of which only stream 1 is enabled.
     fn uas_stick() -> (Xhci, VecMem) {
-        let (mut hc, mut mem) = started();
         let mut image = vec![0x11u8; 512];
         image.extend_from_slice(&[0x22u8; 512]);
-        hc.attach(1, Box::new(crate::periph::usb::UasStorage::new(image)));
+        uas_stick_on(Rc::new(RefCell::new(Disk::from_vec(image))))
+    }
+
+    fn uas_stick_on(disk: Rc<RefCell<Disk>>) -> (Xhci, VecMem) {
+        let (mut hc, mut mem) = started();
+        hc.attach(1, Box::new(crate::periph::usb::UasStorage::with_disk(disk)));
         addressed(&mut hc, &mut mem, 2, COMMAND_PIPE_RING);
         control_no_data(&mut mem, EP0_RING, [0x01, 11, 1, 0, 0, 0, 0, 0]);
         hc.write(DBOFF + 4, Width::Word, 1, &mut mem);
-        for (dci, array, ring) in [(5, STATUS_ARRAY, STATUS_RING), (7, DATA_ARRAY, DATA_RING)] {
+        for (dci, array, ring) in [
+            (5, STATUS_ARRAY, STATUS_RING),
+            (7, DATA_ARRAY, DATA_RING),
+            (8, DATA_OUT_ARRAY, DATA_OUT_RING),
+        ] {
             let ep = DEV_CTX + 0x20 * dci;
             mem.write32(ep, (1 << 10) | 1);
             mem.write32(ep + 8, array as u32);
@@ -1973,6 +1997,69 @@ mod tests {
             "the stream context's dequeue moved, its type stayed"
         );
         assert_eq!(mem.read32(DEV_CTX + 0x20 * 5 + 8), STATUS_ARRAY as u32);
+    }
+
+    fn disk_of_two_blocks() -> Rc<RefCell<Disk>> {
+        Rc::new(RefCell::new(Disk::from_vec(vec![0x11u8; 1024])))
+    }
+
+    /// WRITE(10) of one block at LBA 1, tag 1, with the status transfer
+    /// already queued for the first answer.
+    fn put_write_command(hc: &mut Xhci, mem: &mut VecMem) {
+        queue_normal(mem, STATUS_RING, STATUS_IU, 128);
+        ring(hc, mem, 5, 1);
+        mem.write_bytes(COMMAND_IU, &[0x01, 0, 0, 1]);
+        mem.write_bytes(COMMAND_IU + 16, &[0x2A, 0, 0, 0, 0, 1, 0, 0, 1, 0]);
+        queue_normal(mem, COMMAND_PIPE_RING, COMMAND_IU, 32);
+        mem.write_bytes(DATA_OUT_BUFFER, &[0xAB; 512]);
+    }
+
+    #[test]
+    fn a_write_is_not_answered_while_the_host_waits_to_queue_its_data() {
+        let disk = disk_of_two_blocks();
+        let (mut hc, mut mem) = uas_stick_on(disk.clone());
+        put_write_command(&mut hc, &mut mem);
+        ring(&mut hc, &mut mem, 2, 0);
+
+        assert_eq!(
+            transfer_event(&mem, COMMAND_PIPE_RING),
+            Some((CC_SUCCESS, 0)),
+            "the command IU itself is taken"
+        );
+        assert_eq!(
+            transfer_event(&mem, STATUS_RING),
+            None,
+            "no write ready before a data-out transfer is queued"
+        );
+        assert_eq!(disk.borrow().read(1, 1).unwrap(), vec![0x11; 512]);
+    }
+
+    #[test]
+    fn a_write_with_its_data_queued_with_the_command_gets_write_ready_and_sense() {
+        let disk = disk_of_two_blocks();
+        let (mut hc, mut mem) = uas_stick_on(disk.clone());
+        put_write_command(&mut hc, &mut mem);
+        queue_normal(&mut mem, DATA_OUT_RING, DATA_OUT_BUFFER, 512);
+        ring(&mut hc, &mut mem, 8, 1);
+        ring(&mut hc, &mut mem, 2, 0);
+
+        assert_eq!(
+            transfer_event(&mem, STATUS_RING),
+            Some((CC_SHORT_PACKET, 128 - 4))
+        );
+        assert_eq!(
+            mem.read_bytes(STATUS_IU, 4),
+            vec![0x07, 0, 0, 1],
+            "write ready"
+        );
+        assert_eq!(transfer_event(&mem, DATA_OUT_RING), Some((CC_SUCCESS, 0)));
+
+        queue_normal(&mut mem, STATUS_RING + 16, STATUS_IU, 128);
+        ring(&mut hc, &mut mem, 5, 1);
+        assert!(transfer_event(&mem, STATUS_RING + 16).is_some());
+        assert_eq!(mem.read_bytes(STATUS_IU, 1), vec![0x03], "sense");
+        assert_eq!(mem.read_bytes(STATUS_IU + 6, 1), vec![0], "good status");
+        assert_eq!(disk.borrow().read(1, 1).unwrap(), vec![0xAB; 512]);
     }
 
     #[test]

@@ -975,6 +975,9 @@ struct UasCommand {
     /// A WRITE waiting for its data: next LBA, bytes still owed, and the
     /// bytes of a block not yet whole.
     write: Option<(u64, usize, Vec<u8>)>,
+    /// The Write Ready IU has gone out: the device sends it only once the
+    /// host has a transfer queued on the data-out stream.
+    write_ready: bool,
     status: u8,
 }
 
@@ -989,6 +992,13 @@ struct UasCommand {
 /// Sense IU when the command is done; the data goes on the data pipes. Status
 /// and data pipes use streams, and the device uses the command's tag as the
 /// stream ID of everything that belongs to it.
+///
+/// A WRITE gets its Write Ready IU only once the host has a transfer queued on
+/// the data-out stream of its tag, as a UAS stick (USB vendor `0x2e8a`, product
+/// `0x30`) behind the VL805 of a Raspberry Pi 4B d03115 does: a host that waits
+/// for the Write Ready IU before it queues the data hears nothing and times
+/// out. A transfer queued before the command is NAKed until the command
+/// arrives.
 ///
 /// The descriptors are not measured on a real UAS stick: they are written
 /// from USB 3.2 section 9.6 and the UAS specification (INCITS 471) — endpoints
@@ -1121,6 +1131,7 @@ impl UasStorage {
                 UasCommand {
                     data_in: data,
                     write: None,
+                    write_ready: false,
                     status: 0,
                 },
             );
@@ -1136,10 +1147,10 @@ impl UasStorage {
                     UasCommand {
                         data_in: Vec::new(),
                         write: Some((lba, n as usize * BLOCK_SIZE, Vec::new())),
+                        write_ready: false,
                         status: 0,
                     },
                 );
-                self.push_status(tag, UasStorage::ready_iu(IU_WRITE_READY, tag));
             }
             _ => self.push_status(tag, UasStorage::sense_iu(tag, SCSI_CHECK_CONDITION)),
         }
@@ -1174,11 +1185,18 @@ impl UasStorage {
         let tag = stream as u16;
         let Some(UasCommand {
             write: Some((lba, owed, pending)),
+            write_ready,
             ..
         }) = self.commands.get_mut(&tag)
         else {
             return Xfer::Nak;
         };
+        if !std::mem::replace(write_ready, true) {
+            self.status
+                .entry(stream)
+                .or_default()
+                .push_back(UasStorage::ready_iu(IU_WRITE_READY, tag));
+        }
         let take = data.len().min(*owed);
         pending.extend_from_slice(&data[..take]);
         *owed -= take;
@@ -1611,25 +1629,56 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_uas_write_waits_for_its_write_ready_and_lands_on_the_disk() {
-        let mut dev = uas_stick();
+    fn uas_write_command(dev: &mut UasStorage, tag: u16) {
         let mut cdb = [0u8; 10];
         cdb[0] = 0x2A;
         cdb[5] = 1;
         cdb[8] = 1;
-        dev.data_out_stream(1, 0, &uas_command(1, &cdb));
-        assert_eq!(status_iu(&mut dev, 1), vec![IU_WRITE_READY, 0, 0, 1]);
+        dev.data_out_stream(1, 0, &uas_command(tag, &cdb));
+    }
+
+    #[test]
+    fn a_uas_write_is_silent_until_data_is_queued_on_the_data_out_stream() {
+        let mut dev = uas_stick();
+        uas_write_command(&mut dev, 1);
         assert!(
             matches!(dev.data_in_stream(2, 1, 128), Xfer::Nak),
-            "no sense before the data"
+            "no write ready before the data-out transfer"
         );
+        assert!(matches!(dev.data_in_stream(2, 1, 128), Xfer::Nak));
+        assert_eq!(
+            dev.bot.disk.borrow().read(1, 1).unwrap(),
+            vec![0x11; BLOCK_SIZE]
+        );
+    }
+
+    #[test]
+    fn a_uas_write_gets_write_ready_and_sense_once_its_data_is_queued() {
+        let mut dev = uas_stick();
+        uas_write_command(&mut dev, 1);
         dev.data_out_stream(4, 1, &[0xAB; BLOCK_SIZE]);
-        assert_eq!(status_iu(&mut dev, 1)[6], 0);
+        assert_eq!(status_iu(&mut dev, 1), vec![IU_WRITE_READY, 0, 0, 1]);
+        assert_eq!(status_iu(&mut dev, 1)[0], IU_SENSE);
+        assert!(matches!(dev.data_in_stream(2, 1, 128), Xfer::Nak));
         assert_eq!(
             dev.bot.disk.borrow().read(1, 1).unwrap(),
             vec![0xAB; BLOCK_SIZE]
         );
+    }
+
+    #[test]
+    fn a_uas_write_data_queued_before_the_command_waits_for_it() {
+        let mut dev = uas_stick();
+        assert!(matches!(
+            dev.data_out_stream(4, 1, &[0xAB; BLOCK_SIZE]),
+            Xfer::Nak
+        ));
+        uas_write_command(&mut dev, 1);
+        assert!(matches!(
+            dev.data_out_stream(4, 1, &[0xAB; BLOCK_SIZE]),
+            Xfer::Ok(_)
+        ));
+        assert_eq!(status_iu(&mut dev, 1)[0], IU_WRITE_READY);
     }
 
     #[test]
