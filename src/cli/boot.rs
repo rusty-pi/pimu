@@ -238,6 +238,13 @@ MEDIA AND NETWORK:
     --usb-uas-refuse
               As --usb-uas, but the stick stalls the request that selects
               setting 1, so a host has to fall back to Bulk-Only.
+    --usb-wedge host-silent:<seconds>
+              Make the --usb stick stop taking an address (Address Device
+              fails with USB Transaction Error) when the xHCI controller first
+              runs more than <seconds> after the reset of the SoC, as a
+              Raspberry Pi USB flash drive does behind the VL805 of a
+              Raspberry Pi 4B d03115 when nothing talks to it for about 13.4 s
+              after a warm reset. Model time, not board time: see docs/usb.md.
     --usb-mb <n>
               A stick given by --usb or --otg is <n> MiB, with the image at its
               start, as on a Pi whose first boot uses the rest.
@@ -486,6 +493,8 @@ struct BootOpts {
     otg_dock: bool,
     /// `--usb-uas` / `--usb-uas-refuse`: the `--usb` stick speaks UAS too.
     usb_uas: UsbUas,
+    /// `--usb-wedge host-silent:<seconds>`, in model microseconds.
+    usb_host_silent_us: Option<u64>,
     display: bool,
     display_edid: Option<PathBuf>,
     /// No cap by default: the wall clock is the useful bound.
@@ -875,6 +884,7 @@ impl BootOpts {
         let mut usb_mb: Option<u64> = None;
         let mut otg_dock = false;
         let mut usb_uas = UsbUas::Off;
+        let mut usb_host_silent_us = None;
         let mut display = false;
         let mut display_edid: Option<PathBuf> = None;
         let mut max_steps: Option<u64> = None;
@@ -1096,6 +1106,10 @@ impl BootOpts {
                 "--otg-dock" => otg_dock = true,
                 "--usb-uas" => usb_uas = UsbUas::On,
                 "--usb-uas-refuse" => usb_uas = UsbUas::Refused,
+                "--usb-wedge" => {
+                    let arg = it.next().context("--usb-wedge needs a mode")?;
+                    usb_host_silent_us = Some(parse_host_silent(arg)?);
+                }
                 "--scenario" | "--record" | "--plan" | "--from-log" | "--output" => {
                     bail!("{a} belongs to --scenario, which `boot` takes out before this point")
                 }
@@ -1340,6 +1354,9 @@ impl BootOpts {
         if sd.is_some() && emmc.is_some() {
             bail!("--sd and --emmc are the same host: give one");
         }
+        if usb_host_silent_us.is_some() && usb.is_none() {
+            bail!("--usb-wedge changes the --usb stick: give --usb too");
+        }
         if usb_uas != UsbUas::Off && usb.is_none() {
             bail!("--usb-uas and --usb-uas-refuse change the --usb stick: give --usb too");
         }
@@ -1362,6 +1379,7 @@ impl BootOpts {
             usb_mb,
             otg_dock,
             usb_uas,
+            usb_host_silent_us,
             display,
             display_edid,
             max_steps,
@@ -1708,6 +1726,17 @@ fn open_log(opts: &BootOpts) -> Result<Log> {
     Ok(Log::new(opts.log, out))
 }
 
+/// `host-silent:<seconds>`, as microseconds.
+fn parse_host_silent(arg: &str) -> Result<u64> {
+    let seconds = arg
+        .strip_prefix("host-silent:")
+        .with_context(|| format!("--usb-wedge {arg}: expected host-silent:<seconds>"))?;
+    match seconds.parse::<f64>() {
+        Ok(s) if s.is_finite() && s >= 0.0 => Ok((s * 1e6) as u64),
+        _ => bail!("--usb-wedge {arg}: the time must be a number of seconds"),
+    }
+}
+
 /// What kind of stick `--usb` is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum UsbUas {
@@ -1974,6 +2003,9 @@ impl<'a> Rig<'a> {
                 }
             };
             machine.pcie.endpoint.attach(USB_ROOT_PORT, stick);
+            if let Some(limit_us) = self.opts.usb_host_silent_us {
+                machine.pcie.endpoint.xhci.set_host_silent_limit(limit_us);
+            }
         }
         // The BCM2711's own xHCI: what `BOOT_ORDER` digit `0x5` boots from and
         // what `otg_mode=1` gives Linux.
@@ -3123,6 +3155,27 @@ mod tests {
 
     const BOOT_URL: &str =
         "https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/";
+
+    #[test]
+    fn usb_wedge_host_silent_takes_seconds_and_needs_a_stick() {
+        assert_eq!(parse_host_silent("host-silent:13.4").unwrap(), 13_400_000);
+        assert!(parse_host_silent("host-silent:-1").is_err());
+        assert!(parse_host_silent("host-silent:soon").is_err());
+        assert!(parse_host_silent("deaf").is_err());
+        let parse = |extra: &[&str]| {
+            let mut a = vec!["--eeprom", "pieeprom.bin"];
+            a.extend_from_slice(extra);
+            BootOpts::parse(&args(&a), Path::new(""))
+        };
+        assert!(
+            parse(&["--usb-wedge", "host-silent:5"]).is_err(),
+            "needs --usb"
+        );
+        let o = parse(&["--usb", "stick.img", "--usb-wedge", "host-silent:5"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.usb_host_silent_us, Some(5_000_000));
+    }
 
     #[test]
     fn usb_uas_changes_the_usb_stick_and_needs_one() {

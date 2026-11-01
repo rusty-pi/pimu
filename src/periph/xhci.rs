@@ -372,6 +372,14 @@ struct EventRing {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Xhci {
+    /// A SuperSpeed device stops taking an address when the controller first
+    /// runs later than this after the SoC reset (`--usb-wedge host-silent`).
+    #[serde(skip)]
+    host_silent_limit_us: Option<u64>,
+    #[serde(skip)]
+    first_run_us: Option<u64>,
+    #[serde(skip)]
+    host_silent_wedged: bool,
     caps: crate::snap::Keep<&'static Caps>,
     regs: BTreeMap<u32, u32>,
     ports: Vec<Port>,
@@ -423,6 +431,9 @@ impl Xhci {
             cmd_ptr: 0,
             cmd_ccs: true,
             running: false,
+            host_silent_limit_us: None,
+            first_run_us: None,
+            host_silent_wedged: false,
             scratchpads_ready: false,
             log: Log::default(),
             now_us: 0,
@@ -434,6 +445,12 @@ impl Xhci {
         };
         hc.settle_ports();
         hc
+    }
+
+    /// Make SuperSpeed devices stop taking an address if the controller first
+    /// runs more than `limit_us` after the SoC reset.
+    pub fn set_host_silent_limit(&mut self, limit_us: u64) {
+        self.host_silent_limit_us = Some(limit_us);
     }
 
     pub fn attach(&mut self, port: usize, device: Box<dyn UsbDevice>) {
@@ -667,6 +684,7 @@ impl Xhci {
         let run = new & USBCMD_RS != 0;
         if run && !self.running {
             if self.scratchpads_provided(mem) {
+                self.note_first_run();
                 self.scratchpads_ready = true;
                 self.running = true;
             } else {
@@ -681,6 +699,27 @@ impl Xhci {
             }
         } else if !run {
             self.running = false;
+        }
+    }
+
+    /// The first time the controller runs after the SoC reset is the first
+    /// the attached SuperSpeed devices hear of a host; a limit set with
+    /// [`Xhci::set_host_silent_limit`] makes them stop answering when that is
+    /// too late.
+    fn note_first_run(&mut self) {
+        if self.first_run_us.is_some() {
+            return;
+        }
+        self.first_run_us = Some(self.now_us);
+        if self.host_silent_limit_us.is_some_and(|l| self.now_us > l) {
+            self.host_silent_wedged = true;
+            crate::log!(
+                self.log,
+                Channel::Xhci,
+                "{}host silent for {} us, SuperSpeed devices take no address",
+                self.caps.tag,
+                self.now_us
+            );
         }
     }
 
@@ -1007,6 +1046,9 @@ impl Xhci {
             None => return CC_TRB_ERROR,
         };
         let bsr = trb[3] & (1 << 9) != 0;
+        if self.host_silent_wedged && speed == Speed::Super {
+            return CC_TRANSACTION_ERROR;
+        }
         if !bsr && self.sibling_at_default(root_port, route) {
             return CC_TRANSACTION_ERROR;
         }
@@ -2129,5 +2171,102 @@ mod tests {
         assert_eq!(hc.read(0x10, Width::Word), 0x0028_41EB);
         assert_eq!(hc.read(0x14, Width::Word), 0x0000_0100);
         assert_eq!(hc.read(0x18, Width::Word), 0x0000_0200);
+    }
+
+    /// Run the controller at `run_at_us`, train the stick's link on root port 2
+    /// and ask it for an address; the completion code of `Address Device`.
+    fn stick_address_code(limit_us: Option<u64>, run_at_us: u64) -> u32 {
+        use crate::periph::usb::MassStorage;
+        let mut hc = Xhci::new();
+        hc.attach(2, Box::new(MassStorage::new(vec![0; 4096])));
+        if let Some(limit) = limit_us {
+            hc.set_host_silent_limit(limit);
+        }
+        let mut mem = VecMem::default();
+        mem.write32(ERST, EVENT_RING as u32);
+        mem.write32(ERST + 4, 0);
+        mem.write32(ERST + 8, 16);
+        for (off, v) in [
+            (ERSTSZ, 1),
+            (ERDP_LO, EVENT_RING as u32),
+            (ERSTBA_LO, ERST as u32),
+            (DCBAAP_LO, DCBAA as u32),
+        ] {
+            hc.write(off, Width::Word, v, &mut mem);
+        }
+        provide_scratchpads(&mut hc, &mut mem);
+        hc.write(CRCR_LO, Width::Word, CMD_RING as u32 | 1, &mut mem);
+        hc.advance(run_at_us);
+        hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
+        hc.advance(run_at_us + LINK_TRAIN_US);
+        assert!(hc.link_due(run_at_us + LINK_TRAIN_US));
+        hc.train_links(&mut mem);
+        let status_change = 1;
+        let ev = command(
+            &mut hc,
+            &mut mem,
+            0,
+            status_change,
+            [0, 0, 0, (TRB_ENABLE_SLOT << 10) | 1],
+        );
+        assert_eq!(ev[2] >> 24, CC_SUCCESS);
+        mem.write32(DCBAA + 8, DEV_CTX as u32);
+        mem.write32(INPUT_CTX + 4, 0x3);
+        mem.write32(INPUT_CTX + 0x20, 1 << 27);
+        mem.write32(INPUT_CTX + 0x24, 2 << 16);
+        mem.write32(INPUT_CTX + 0x48, EP0_RING as u32 | 1);
+        let ev = command(
+            &mut hc,
+            &mut mem,
+            1,
+            status_change + 1,
+            [
+                INPUT_CTX as u32,
+                0,
+                0,
+                (1 << 24) | (TRB_ADDRESS_DEVICE << 10) | 1,
+            ],
+        );
+        ev[2] >> 24
+    }
+
+    /// Board data: a stick given its first host contact later than about
+    /// 13.4 s after the reset takes no address; any earlier contact, and a
+    /// run with no limit (an unsigned boot talks to it at about 2 s), does.
+    #[test]
+    fn a_stick_takes_no_address_when_the_host_stays_silent_too_long() {
+        let limit = Some(13_400_000);
+        assert_eq!(
+            stick_address_code(limit, 13_400_000),
+            CC_SUCCESS,
+            "at the limit"
+        );
+        assert_eq!(stick_address_code(limit, 13_400_001), CC_TRANSACTION_ERROR);
+        assert_eq!(
+            stick_address_code(limit, 1_900_000),
+            CC_SUCCESS,
+            "early contact"
+        );
+        assert_eq!(
+            stick_address_code(None, 900_000_000),
+            CC_SUCCESS,
+            "no limit"
+        );
+    }
+
+    /// The limit is about the first contact: a controller reset later does not
+    /// start the clock again.
+    #[test]
+    fn only_the_first_run_counts_towards_the_host_silent_limit() {
+        let mut hc = Xhci::new();
+        hc.set_host_silent_limit(10_000_000);
+        let mut mem = VecMem::default();
+        provide_scratchpads(&mut hc, &mut mem);
+        hc.advance(1_000_000);
+        hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
+        hc.advance(20_000_000);
+        hc.write(USBCMD, Width::Word, USBCMD_HCRST, &mut mem);
+        hc.write(USBCMD, Width::Word, USBCMD_RS, &mut mem);
+        assert!(!hc.host_silent_wedged);
     }
 }

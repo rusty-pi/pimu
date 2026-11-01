@@ -9,6 +9,7 @@ port 2). The model is in `src/periph/usb.rs`; the host controller side is
 | `--usb <img>` | Bulk-Only Transport only, with the descriptors measured on a Raspberry Pi 4B d03115 and a Samsung "Flash Drive FIT". |
 | `--usb <img> --usb-uas` | A UAS stick: one interface with Bulk-Only as alternate setting 0 and USB Attached SCSI as setting 1. |
 | `--usb <img> --usb-uas-refuse` | The same, but the stick stalls `SET_INTERFACE` to setting 1, so a host has to stay on Bulk-Only. |
+| `--usb <img> --usb-wedge host-silent:<seconds>` | Any of the above, but it refuses an address when the host first runs later than that after reset. See [A stick that wedges](#a-stick-that-wedges). |
 
 `--otg` is always Bulk-Only.
 
@@ -89,6 +90,57 @@ stalled) and `UAS did not work, using bulk-only`, and boots the same.
 This needs a nuboot build, so it is not part of `cargo test`; the unit tests in
 `usb.rs` and `xhci.rs` cover the IUs, the streams, `Set TR Dequeue Pointer` and
 the deconfigure.
+
+## A stick that wedges
+
+A Raspberry Pi flash drive (`2e8a:0030`, UAS) behind the VL805 of a Raspberry
+Pi 4B d03115 works after a power cycle and, after a warm reboot, sometimes
+fails `Address Device` (Linux: `device not accepting address 2, error -62`).
+It fails when the first host contact after the reset comes late. With signed
+boot (`SIGNED_BOOT=1`, SD first) the bootloader makes no contact, so the first
+one is Linux's xHCI probe; with `SIGNED_BOOT=0`, or USB first in `BOOT_ORDER`,
+the bootloader enumerates the stick about 3 s after reset and the stick keeps
+working however late Linux comes. On a Raspberry Pi 4B d03115 with a signed
+16 MiB `boot.img` and `boot_delay` in `config.txt`, Linux's first xHCI access
+is at 13.2 s (`boot_delay=1.5` and `1.75`, the stick works) and 13.5 s
+(`boot_delay=2`, it wedges): the limit is about 13.4 s from the warm reset.
+The same happens with every `start4.elf` and every bootloader tried that can
+load a signed image. Why the stick does it is not known.
+
+`--usb-wedge host-silent:<seconds>` models that and nothing else: the first time
+the xHCI controller runs (`USBCMD.RS`) after the reset of the SoC is the first
+the stick hears of a host, and when that is later than `<seconds>` every
+`Address Device` for a SuperSpeed device fails with USB Transaction Error. A
+controller run before the limit, or a later one, changes nothing, and the BCM2711's own xHCI
+and USB 2.0 devices are not touched. It needs `--usb`, works with `--usb-uas`,
+and is a command line option only.
+
+The limit is model time, and the model's time is not the board's: the
+bootloader's first stage takes about the same, but a 30 MiB `boot.img` takes 41 s
+to verify (5.6 s on the board) and Linux reaches its first xHCI access 2.7 times
+later. So the board's 13.4 s cannot be used; calibrate it per build. For the
+shortest signed config, a 14 MiB `boot.img` of the official `start4.elf`,
+`fixup4.dat`, device tree and `kernel8.img` signed with the test key
+(`testdata/netboot/test-signing-key.pem`), SD first, Linux's first xHCI access
+is at 36.2 s with `boot_delay=2` in `config.txt` and 2.0 s earlier with
+`boot_delay=0`: a limit of `35.2` wedges the first and not the second. The same
+card with `SIGNED_BOOT=0` runs the controller at 1.7 s, in the bootloader, and
+never wedges, as the stick on the board does not. A signed boot only skips the
+bootloader's early USB bring-up when `MBOX5` keeps the secure-boot mark; see
+[`periph/mcsync.md`](periph/mcsync.md).
+
+```bash
+pimu boot --eeprom pieeprom-signed.bin --bootconf SIGNED_BOOT=1 \
+  --sd card.img --usb stick.img --usb-wedge host-silent:35.2
+```
+
+`pieeprom-signed.bin` is the official EEPROM image with the test key's public
+half in its `pubkey.bin` slot (`--eeprom-pubkey`), and `card.img` holds the
+files as they are (read when `SIGNED_BOOT=0`) beside `boot.img` and `boot.sig`.
+
+Unit tests in `xhci.rs` check the limit: the first run at the limit works, a
+microsecond later wedges, and a later controller reset does not start the clock
+again.
 
 ## Not reproduced
 
