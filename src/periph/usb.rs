@@ -1103,6 +1103,20 @@ pub struct UasStorage {
     data_in_queued: HashSet<u32>,
 }
 
+/// How many bytes of the answer the CDB asks for, for the commands whose answer
+/// is longer than what a host may want. UAS has no transfer length of its own
+/// for the device to cut the answer to.
+fn allocation_length(cdb: &[u8]) -> Option<usize> {
+    match cdb.first()? {
+        0x03 | 0x1A => cdb.get(4).map(|&n| usize::from(n)),
+        0x12 => Some(usize::from(u16::from_be_bytes([
+            *cdb.get(3)?,
+            *cdb.get(4)?,
+        ]))),
+        _ => None,
+    }
+}
+
 /// Which endpoint number carries which UAS pipe: bulk OUT and IN endpoints are
 /// told apart by direction, so the command and data-out pipes are OUT numbers
 /// and the status and data-in pipes IN numbers.
@@ -1296,7 +1310,10 @@ impl UasStorage {
             self.write_command(tag, cdb);
             return Xfer::Ok(Vec::new());
         }
-        let (data, status) = self.bot.scsi(cdb, 0);
+        let (mut data, status) = self.bot.scsi(cdb, 0);
+        if let Some(alloc) = allocation_length(cdb) {
+            data.truncate(alloc);
+        }
         if status != 0 {
             self.push_status(tag, UasStorage::sense_iu(tag, SCSI_CHECK_CONDITION));
         } else if data.is_empty() {
@@ -1924,6 +1941,22 @@ mod tests {
         assert_eq!(data, vec![0x11; BLOCK_SIZE]);
         let sense = status_iu(&mut dev, 7);
         assert_eq!(sense[0], IU_SENSE);
+    }
+
+    #[test]
+    fn a_uas_answer_is_cut_to_the_allocation_length_of_the_cdb() {
+        let mut dev = uas_stick();
+        assert!(matches!(dev.data_in_stream(3, 9, 4), Xfer::Nak));
+        let mode_sense_4 = [0x1A, 0, 0x3F, 0, 4, 0];
+        assert!(matches!(
+            dev.data_out_stream(1, 0, &uas_command(9, &mode_sense_4)),
+            Xfer::Ok(_)
+        ));
+        let Xfer::Ok(data) = dev.data_in_stream(3, 9, 4) else {
+            panic!("no data")
+        };
+        assert_eq!(data.len(), 4);
+        assert_eq!(status_iu(&mut dev, 9)[0], IU_SENSE);
     }
 
     #[test]
