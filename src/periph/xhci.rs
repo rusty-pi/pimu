@@ -2020,8 +2020,11 @@ mod tests {
         hc.write(DBOFF + 4, Width::Word, dci | stream << 16, mem);
     }
 
+    /// A host that queues the data-in transfer with the command, as Linux's
+    /// `uas` does, is not sent a Read Ready: the data arrives and the sense IU
+    /// ends the command on the status transfer queued for it.
     #[test]
-    fn a_read_runs_over_stream_1_of_the_status_and_data_pipes() {
+    fn a_read_with_its_data_queued_first_runs_over_stream_1_without_read_ready() {
         let (mut hc, mut mem) = uas_stick();
         queue_normal(&mut mem, STATUS_RING, STATUS_IU, 128);
         queue_normal(&mut mem, DATA_RING, DATA_BUFFER, 512);
@@ -2038,6 +2041,36 @@ mod tests {
             transfer_event(&mem, COMMAND_PIPE_RING),
             Some((CC_SUCCESS, 0))
         );
+        assert_eq!(transfer_event(&mem, DATA_RING), Some((CC_SUCCESS, 0)));
+        assert_eq!(mem.read_bytes(DATA_BUFFER, 512), vec![0x22; 512]);
+        assert!(transfer_event(&mem, STATUS_RING).is_some());
+        assert_eq!(
+            mem.read_bytes(STATUS_IU, 1),
+            vec![0x03],
+            "sense, no read ready"
+        );
+        assert_eq!(mem.read_bytes(STATUS_IU + 6, 1), vec![0], "good status");
+        assert_eq!(
+            mem.read32(STATUS_ARRAY + 16),
+            (STATUS_RING as u32 + 16) | 2 | 1,
+            "the stream context's dequeue moved, its type stayed"
+        );
+        assert_eq!(mem.read32(DEV_CTX + 0x20 * 5 + 8), STATUS_ARRAY as u32);
+    }
+
+    /// A host that queues only the status transfer is told when the device is
+    /// ready for the data-in transfer.
+    #[test]
+    fn a_read_with_no_data_queued_gets_read_ready_on_stream_1() {
+        let (mut hc, mut mem) = uas_stick();
+        queue_normal(&mut mem, STATUS_RING, STATUS_IU, 128);
+        mem.write_bytes(COMMAND_IU, &[0x01, 0, 0, 1]);
+        mem.write_bytes(COMMAND_IU + 16, &[0x28, 0, 0, 0, 0, 1, 0, 0, 1, 0]);
+        queue_normal(&mut mem, COMMAND_PIPE_RING, COMMAND_IU, 32);
+
+        ring(&mut hc, &mut mem, 5, 1);
+        ring(&mut hc, &mut mem, 2, 0);
+
         assert_eq!(
             transfer_event(&mem, STATUS_RING),
             Some((CC_SHORT_PACKET, 128 - 4))
@@ -2047,20 +2080,10 @@ mod tests {
             vec![0x06, 0, 0, 1],
             "read ready"
         );
+        queue_normal(&mut mem, DATA_RING, DATA_BUFFER, 512);
+        ring(&mut hc, &mut mem, 7, 1);
         assert_eq!(transfer_event(&mem, DATA_RING), Some((CC_SUCCESS, 0)));
         assert_eq!(mem.read_bytes(DATA_BUFFER, 512), vec![0x22; 512]);
-
-        queue_normal(&mut mem, STATUS_RING + 16, STATUS_IU, 128);
-        ring(&mut hc, &mut mem, 5, 1);
-        assert!(transfer_event(&mem, STATUS_RING + 16).is_some());
-        assert_eq!(mem.read_bytes(STATUS_IU, 1), vec![0x03], "sense");
-        assert_eq!(mem.read_bytes(STATUS_IU + 6, 1), vec![0], "good status");
-        assert_eq!(
-            mem.read32(STATUS_ARRAY + 16),
-            (STATUS_RING as u32 + 32) | 2 | 1,
-            "the stream context's dequeue moved, its type stayed"
-        );
-        assert_eq!(mem.read32(DEV_CTX + 0x20 * 5 + 8), STATUS_ARRAY as u32);
     }
 
     fn disk_of_two_blocks() -> Rc<RefCell<Disk>> {

@@ -17,7 +17,7 @@
 //!   USB 2.0 socket, what `--otg <img>` puts on the USB-C port.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 pub use super::disk::Disk;
@@ -1098,6 +1098,9 @@ pub struct UasStorage {
     commands: HashMap<u16, UasCommand>,
     /// IUs for the status pipe, by stream ID.
     status: HashMap<u32, VecDeque<Vec<u8>>>,
+    /// Streams of the data-in pipe a transfer has been queued on that no
+    /// command has answered yet.
+    data_in_queued: HashSet<u32>,
 }
 
 /// Which endpoint number carries which UAS pipe: bulk OUT and IN endpoints are
@@ -1174,6 +1177,7 @@ impl UasStorage {
             refuse_uas: false,
             commands: HashMap::new(),
             status: HashMap::new(),
+            data_in_queued: HashSet::new(),
         }
     }
 
@@ -1230,6 +1234,7 @@ impl UasStorage {
             refuse_uas: false,
             commands: HashMap::new(),
             status: HashMap::new(),
+            data_in_queued: HashSet::new(),
         }
     }
 
@@ -1244,6 +1249,7 @@ impl UasStorage {
         self.bot.reset();
         self.commands.clear();
         self.status.clear();
+        self.data_in_queued.clear();
     }
 
     fn push_status(&mut self, tag: u16, iu: Vec<u8>) {
@@ -1282,6 +1288,7 @@ impl UasStorage {
             return Xfer::Stall;
         }
         let tag = u16::from_be_bytes([iu[2], iu[3]]);
+        let data_in_queued = self.data_in_queued.remove(&u32::from(tag));
         let cdb_len = 16 + usize::from(iu[6] >> 2) * 4;
         let cdb = &iu[16..iu.len().min(16 + cdb_len)];
         let op = cdb.first().copied().unwrap_or(0);
@@ -1295,7 +1302,13 @@ impl UasStorage {
         } else if data.is_empty() {
             self.push_status(tag, UasStorage::sense_iu(tag, 0));
         } else {
-            self.push_status(tag, UasStorage::ready_iu(IU_READ_READY, tag));
+            // A host that has queued the data-in transfer already, as Linux's
+            // `uas` does with the command, is not told it may: the device just
+            // answers it. Telling it anyway leaves Linux with a status
+            // transfer it does not re-queue, and the command never ends.
+            if !data_in_queued {
+                self.push_status(tag, UasStorage::ready_iu(IU_READ_READY, tag));
+            }
             self.commands.insert(
                 tag,
                 UasCommand {
@@ -1336,6 +1349,7 @@ impl UasStorage {
     fn data_in_pipe(&mut self, stream: u32, len: usize) -> Xfer {
         let tag = stream as u16;
         let Some(cmd) = self.commands.get_mut(&tag) else {
+            self.data_in_queued.insert(stream);
             return Xfer::Nak;
         };
         if cmd.data_in.is_empty() {
@@ -1881,6 +1895,35 @@ mod tests {
         };
         assert_eq!(data, vec![0x11; BLOCK_SIZE]);
         assert!(matches!(dev.data_in_stream(4, 5, 128), Xfer::Ok(_)));
+    }
+
+    /// Linux's `uas` queues the data-in transfer with the command, and wants no
+    /// Read Ready for it.
+    #[test]
+    fn a_uas_read_with_its_data_in_transfer_queued_first_gets_no_read_ready() {
+        let mut dev = uas_stick();
+        assert!(
+            matches!(dev.data_in_stream(3, 7, 512), Xfer::Nak),
+            "queued, no command yet"
+        );
+        let mut cdb = [0u8; 10];
+        cdb[0] = 0x28;
+        cdb[5] = 2;
+        cdb[8] = 1;
+        assert!(matches!(
+            dev.data_out_stream(1, 0, &uas_command(7, &cdb)),
+            Xfer::Ok(_)
+        ));
+        assert!(
+            matches!(dev.data_in_stream(2, 7, 128), Xfer::Nak),
+            "no Read Ready"
+        );
+        let Xfer::Ok(data) = dev.data_in_stream(3, 7, 512) else {
+            panic!("no data")
+        };
+        assert_eq!(data, vec![0x11; BLOCK_SIZE]);
+        let sense = status_iu(&mut dev, 7);
+        assert_eq!(sense[0], IU_SENSE);
     }
 
     #[test]
