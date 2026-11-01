@@ -42,7 +42,7 @@ const LOG_CHANNELS = [
 const GITHUB_DIRECTORY = { repo: "raspberrypi/firmware", ref: "master", path: "boot" };
 
 const DEFAULT_STATE = {
-  sd: { mode: "official", image: { kind: "url", url: "" }, github: { ...GITHUB_DIRECTORY } },
+  sd: { mode: "official", image: { kind: "url", url: "" }, github: { ...GITHUB_DIRECTORY }, sign: false },
   configTxt: "arm_64bit=1\nenable_uart=1\nuart_2ndstage=1",
   cmdline: "console=ttyAMA0,115200",
   eeprom: { kind: "official", url: OFFICIAL_EEPROM },
@@ -376,7 +376,10 @@ async function buildRequest() {
     const cfg = s.configTxt.split("\n").map((l) => l.trim()).filter(Boolean);
     if (cfg.length) options.configTxt = cfg;
     if (s.cmdline.trim()) options.cmdline = s.cmdline.trim();
-    if (s.sd.mode !== "none") request.boot = bootSource(s.sd, files.boot, "SD card");
+    if (s.sd.mode !== "none") {
+      request.boot = bootSource(s.sd, files.boot, "SD card");
+      if (s.sd.sign) request.boot.sign = true;
+    }
   }
   if (s.net.plugged) {
     request.net = {};
@@ -384,8 +387,9 @@ async function buildRequest() {
     if (s.net.http.on) request.net.http = bootSource(s.net.http, files.http, "HTTP");
   }
   if (s.usb.kind !== "none") {
-    request.images.usb = imageDescriptor(s.usb, files.usb, "USB stick");
-    if (s.usb.mb) options.usbMb = Number(s.usb.mb);
+    if (s.usb.kind === "blank") request.images.usb = { blank: Number(s.usb.mb || BLANK_STICK_MIB) * 1024 * 1024 };
+    else request.images.usb = imageDescriptor(s.usb, files.usb, "USB stick");
+    if (s.usb.mb && s.usb.kind !== "blank") options.usbMb = Number(s.usb.mb);
     if (s.usb.model !== "generic") options.usbModel = s.usb.model;
     const hostSilent = s.usb.hostSilent.trim();
     if (hostSilent) {
@@ -1015,13 +1019,16 @@ function radio(name, value, checked, label, help, onChange) {
     h("span", {}, label, help ? h("small", {}, help) : null));
 }
 
-function imagePicker(slot, spec, what) {
+function imagePicker(slot, spec, what, { blank = false } = {}) {
   const file = files[slot === "sd" ? "sdImage" : slot];
   return h("div", {},
     h("div", { class: "row" },
       h("label", {}, h("input", { type: "radio", name: `${slot}-kind`, checked: spec.kind === "file", onchange: () => { spec.kind = "file"; changed(); renderDrawer(); } }), " Local file"),
-      h("label", {}, h("input", { type: "radio", name: `${slot}-kind`, checked: spec.kind === "url", onchange: () => { spec.kind = "url"; changed(); renderDrawer(); } }), " URL")),
-    spec.kind === "file"
+      h("label", {}, h("input", { type: "radio", name: `${slot}-kind`, checked: spec.kind === "url", onchange: () => { spec.kind = "url"; changed(); renderDrawer(); } }), " URL"),
+      blank ? h("label", {}, h("input", { type: "radio", name: `${slot}-kind`, checked: spec.kind === "blank", onchange: () => { spec.kind = "blank"; changed(); renderDrawer(); } }), " Empty") : null),
+    spec.kind === "blank"
+      ? h("p", { class: "help hint" }, `Nothing on it: zeros, ${BLANK_STICK_MIB} MiB unless the size below says otherwise. Enough for the stick to be found and attached.`)
+      : spec.kind === "file"
       ? h("div", { class: "field" }, filePicker(`Choose ${what}…`, { accept: ".img,.iso,.bin,.raw", onPick: ([f]) => { files[slot === "sd" ? "sdImage" : slot] = f; renderDrawer(); }, current: file ? `${file.name} (${mib(file.size)})` : "nothing chosen" }))
       : h("div", { class: "field" }, h("input", { type: "url", placeholder: "https://example.org/disk.img", value: spec.url, "aria-label": `${what} URL`, oninput: (e) => { spec.url = e.target.value; changed(); } })),
     checkbox("Keep what the guest writes, in this browser", Boolean(spec.keep), (v) => (spec.keep = v),
@@ -1089,6 +1096,9 @@ const PANELS = {
         radio(group, "image", sd.mode === "image", "A disk image", "A card image, read as the guest asks for blocks", () => { sd.mode = "image"; changed(); renderDrawer(); }),
         radio(group, "none", sd.mode === "none", "No card", "The slot is empty: boot from the network, USB or NVMe", () => { sd.mode = "none"; changed(); renderDrawer(); })),
       bootFilesFields(sd, "boot"),
+      sd.mode !== "image" && sd.mode !== "none" ? h("div", { class: "field" },
+        checkbox("Also as a signed boot.img", sd.sign, (v) => (sd.sign = v),
+          "For SIGNED_BOOT=1: the page packs these files, with the lines below, into boot.img, signs it with a key made for each power-on and puts the public key in the EEPROM. The files stay on the card as they are.")) : null,
       sd.mode === "image" ? imagePicker("sd", sd.image, "a card image") : null,
       sd.mode !== "image" && (sd.mode !== "none" || netServes()) ? [
         h("h3", {}, "config.txt and cmdline.txt"),
@@ -1129,7 +1139,7 @@ const PANELS = {
         radio("usb-none", "none", state.usb.kind === "none", "Nothing plugged in", null, () => { state.usb.kind = "none"; changed(); renderDrawer(); }),
         radio("usb-none", "file", state.usb.kind !== "none", "A USB stick (disk image)", "Boots when the boot order includes USB mass storage; with a stick the order defaults to SD card, then USB", () => { state.usb.kind = state.usb.kind === "none" ? "file" : state.usb.kind; changed(); renderDrawer(); })),
       state.usb.kind !== "none" ? [
-        imagePicker("usb", state.usb, "a disk image"),
+        imagePicker("usb", state.usb, "a disk image", { blank: true }),
         h("div", { class: "field" }, h("label", {}, "Stick size (MiB, optional)"), h("input", { type: "number", min: 1, value: state.usb.mb, oninput: (e) => { state.usb.mb = e.target.value; changed(); } }),
           h("p", { class: "help" }, "Bigger than the image: the rest reads as zeros, as on a stick the image was written to the start of.")),
         h("div", { class: "field" }, h("span", { class: "label" }, "Stick model"),
@@ -1340,7 +1350,8 @@ const STICK_MODELS = [
   ["generic", "Generic Bulk-Only stick", "A Samsung Flash Drive FIT, measured on a Raspberry Pi 4B."],
   ["rpi-flash-drive", "Raspberry Pi Flash Drive", "The official USB flash drive (2e8a:0030), UAS, with the descriptors of a real one. It wedges after a late first host contact, as the real one does: see below."],
 ];
-const IMAGE_FROM = { file: "a local file", url: "a URL", none: "nothing" };
+const IMAGE_FROM = { file: "a local file", url: "a URL", blank: "empty", none: "nothing" };
+const BLANK_STICK_MIB = 16;
 const EEPROM_FROM = { official: "official image", url: "a URL", file: "a file" };
 
 const notSet = (v) => (v === "" || v == null ? "not set" : String(v));
@@ -1364,6 +1375,7 @@ const CHANGE_FIELDS = [
   ["sd.github.repo", "sd", "Repository", notSet, sdMode("github")],
   ["sd.github.ref", "sd", "Branch or tag", notSet, sdMode("github")],
   ["sd.github.path", "sd", "Directory", notSet, sdMode("github")],
+  ["sd.sign", "sd", "Also as a signed boot.img", onOff, (s) => s.sd.mode !== "image" && s.sd.mode !== "none"],
   ["sd.image.kind", "sd", "Card image from", (v) => IMAGE_FROM[v], sdMode("image")],
   ["sd.image.url", "sd", "Card image URL", notSet, (s) => s.sd.mode === "image" && s.sd.image.kind === "url"],
   ["configTxt", "sd", "config.txt", "lines", (s) => s.sd.mode !== "image"],
@@ -1647,6 +1659,7 @@ function tail(url) {
 }
 
 function describeImage(spec, file) {
+  if (spec.kind === "blank") return `empty, ${spec.mb || BLANK_STICK_MIB} MiB`;
   if (spec.kind === "file") return file ? file.name : "no file";
   return spec.url.trim() ? tail(spec.url.trim()) : "no URL";
 }

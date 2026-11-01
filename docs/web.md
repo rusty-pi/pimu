@@ -33,9 +33,9 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 | Part | What it takes |
 |---|---|
 | Power | The switch that powers the board on and off. |
-| microSD | The official firmware files from GitHub, the files of any GitHub directory, a folder from your computer, a disk image (local file or URL), or no card at all. `config.txt` lines and the kernel command line. |
+| microSD | The official firmware files from GitHub, the files of any GitHub directory, a folder from your computer, a disk image (local file or URL), or no card at all. `config.txt` lines and the kernel command line, and optionally the same files again as a signed `boot.img`. |
 | EEPROM | The bootloader image (official, a URL, a file), the boot order as a list of steps, every bootloader setting as a form with drop-downs where the value is one of a few, signed-boot options. |
-| USB 3.0 | A stick: a disk image, local or by URL, its size, which stick it is (a generic Bulk-Only one, or the official Raspberry Pi Flash Drive), and optionally the time after which a silent host leaves it taking no address ([`usb.md`](usb.md#a-stick-that-wedges)). |
+| USB 3.0 | A stick: a disk image (local, by URL, or an empty stick of zeros), its size, which stick it is (a generic Bulk-Only one, or the official Raspberry Pi Flash Drive), and optionally the time after which a silent host leaves it taking no address ([`usb.md`](usb.md#a-stick-that-wedges)). |
 | USB-C | The power, and a stick on the OTG port, optionally behind a dock. |
 | Ethernet | The built-in network peer (DHCP, DNS, TFTP, HTTP) as a boot server over TFTP, HTTP or both, each with its own files, and a Wake-on-LAN packet. |
 | HDMI 0 | A monitor, with its EDID. |
@@ -111,6 +111,16 @@ It needs more than the build:
 To try it from a checkout: `scripts/build-wasm.sh`, then
 `PIMU_COI=1 node web/tests/server.mjs` (which sends the two headers) and open
 `/tests/threads-check.html` for the check, or `/` for the page itself.
+
+## Signed boot.img on the card
+
+**Also as a signed boot.img** in the microSD panel, for a card of files, packs the
+files (with the `config.txt` and `cmdline.txt` lines of the panel) into
+`boot.img`, signs it with a key WebCrypto makes for that power-on and puts
+`boot.img` and `boot.sig` on the card beside the files themselves. The key's
+public half goes into the EEPROM's `pubkey.bin` slot, so `SIGNED_BOOT=1` boots
+the card, and `SIGNED_BOOT=0` reads the files as they are. It cannot be combined
+with HTTP boot, which signs with a key of its own.
 
 ## Network boot
 

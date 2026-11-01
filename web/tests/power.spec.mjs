@@ -153,6 +153,30 @@ test.describe("powering on", () => {
     expect(options.usbHostSilent).toBe("off");
   });
 
+  test("an empty stick asks for zeros of the size given, 16 MiB if none", async ({ app }) => {
+    await app.open("usb");
+    await app.drawer.getByRole("radio", { name: /A USB stick/ }).check();
+    await app.drawer.getByRole("radio", { name: "Empty" }).check();
+    await app.powerOn();
+    expect((await app.request()).images.usb).toEqual({ blank: 16 * 1024 * 1024 });
+    await app.powerButton.click();
+    await app.field("Stick size").locator("input").fill("32");
+    await app.powerOn();
+    const { images, options } = await app.request();
+    expect(images.usb).toEqual({ blank: 32 * 1024 * 1024 });
+    expect(options).not.toHaveProperty("usbMb");
+  });
+
+  test("a signed boot.img on the card asks the worker to pack and sign the files", async ({ app }) => {
+    await app.powerOn();
+    expect((await app.request()).boot).not.toHaveProperty("sign");
+    await app.powerButton.click();
+    await app.open("sd");
+    await app.drawer.getByLabel("Also as a signed boot.img").check();
+    await app.powerOn();
+    expect((await app.request()).boot.sign).toBe(true);
+  });
+
   test("a wedge time that is neither a number nor off is refused", async ({ app }) => {
     await plugStick(app);
     await app.field("Takes no address").locator("input").fill("soon");

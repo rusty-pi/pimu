@@ -122,7 +122,12 @@ function urlImage(url) {
   return { size, read };
 }
 
+function blankImage(size) {
+  return { size, read: (offset, length) => new Uint8Array(Math.max(0, Math.min(length, size - offset))) };
+}
+
 function imageOf(descriptor) {
+  if (descriptor.blank) return blankImage(descriptor.blank);
   return descriptor.file ? fileImage(descriptor.file) : urlImage(descriptor.url);
 }
 
@@ -138,11 +143,16 @@ async function collect(source) {
 
 const HTTP_BOOT_DIRECTORY = "net_install";
 
-async function httpBootFiles(files, Boot = BootImage) {
+async function signedBoot(files, Boot = BootImage) {
   const volume = new Boot();
   for (const [path, bytes] of files) volume.add_file(path, bytes);
   const image = volume.build();
   const { sig, pubkey } = await signImage(image);
+  return { pubkey, image, sig };
+}
+
+async function httpBootFiles(files, Boot = BootImage) {
+  const { pubkey, image, sig } = await signedBoot(files, Boot);
   return {
     pubkey,
     served: [[`${HTTP_BOOT_DIRECTORY}/boot.img`, image], [`${HTTP_BOOT_DIRECTORY}/boot.sig`, sig]],
@@ -172,6 +182,12 @@ async function powerOn(request) {
   }
 
   const edits = { config: request.options.configTxt, cmdline: request.options.cmdline };
+  if (request.boot.sign) {
+    if (request.net?.http) throw new Error("A signed boot.img on the card and HTTP boot each sign with a key of their own; use one");
+    const boot = await signedBoot(withCardEdits(bootFiles, edits), Boot);
+    bootFiles.push(["boot.img", boot.image], ["boot.sig", boot.sig]);
+    extras.pubkey = boot.pubkey;
+  }
   const tftpFiles = request.net?.tftp ? withCardEdits(await collect(request.net.tftp), edits) : [];
   let httpFiles = [];
   if (request.net?.http) {
