@@ -15,6 +15,7 @@ use pimu::harness;
 use pimu::log::{Log, Spec};
 use pimu::machine::Machine;
 use pimu::mem::Region;
+use pimu::periph::usb::{HostSilent, StickModel};
 use pimu::soc::{Board, Stepping};
 use pimu::vpu::decode::decode;
 use pimu::vpu::length::insn_len_bytes;
@@ -234,14 +235,23 @@ MEDIA AND NETWORK:
     --usb-uas-refuse
               As --usb-uas, but the stick stalls the request that selects
               setting 1, so a host has to fall back to Bulk-Only.
-    --usb-wedge host-silent:<seconds>
+    --usb-model generic|rpi-flash-drive
+              Which stick --usb is. `generic` (the default) is the Samsung
+              Bulk-Only stick, or with --usb-uas an invented UAS one.
+              `rpi-flash-drive` is the official Raspberry Pi USB Flash Drive
+              (2e8a:0030) as measured on a Raspberry Pi 4B d03115: UAS with
+              Bulk-Only as the other setting, and it wedges, see --usb-wedge.
+    --usb-wedge host-silent:<seconds>|off
               Make the --usb stick stop taking an address (Address Device
               fails with USB Transaction Error) when the xHCI controller first
               runs more than <seconds> after a warm reset the stick survived
               (the first power-on never wedges it), as a
               Raspberry Pi USB flash drive does behind the VL805 of a
               Raspberry Pi 4B d03115 when nothing talks to it for about 13.4 s
-              after a warm reset. Model time, not board time: see docs/usb.md.
+              after a warm reset. `rpi-flash-drive` does it by default, with the
+              limit docs/usb.md calibrates (35.2 s of model time, not board
+              time); `off` turns it off. The generic stick never does unless
+              asked.
     --usb-mb <n>
               A stick given by --usb or --otg is <n> MiB, with the image at its
               start, as on a Pi whose first boot uses the rest.
@@ -490,8 +500,10 @@ struct BootOpts {
     otg_dock: bool,
     /// `--usb-uas` / `--usb-uas-refuse`: the `--usb` stick speaks UAS too.
     usb_uas: UsbUas,
-    /// `--usb-wedge host-silent:<seconds>`, in model microseconds.
-    usb_host_silent_us: Option<u64>,
+    /// `--usb-model`.
+    usb_model: StickModel,
+    /// `--usb-wedge host-silent:<seconds>|off`.
+    usb_host_silent: HostSilent,
     display: bool,
     display_edid: Option<PathBuf>,
     /// No cap by default: the wall clock is the useful bound.
@@ -881,7 +893,8 @@ impl BootOpts {
         let mut usb_mb: Option<u64> = None;
         let mut otg_dock = false;
         let mut usb_uas = UsbUas::Off;
-        let mut usb_host_silent_us = None;
+        let mut usb_model = StickModel::default();
+        let mut usb_host_silent = HostSilent::default();
         let mut display = false;
         let mut display_edid: Option<PathBuf> = None;
         let mut max_steps: Option<u64> = None;
@@ -1105,7 +1118,13 @@ impl BootOpts {
                 "--usb-uas-refuse" => usb_uas = UsbUas::Refused,
                 "--usb-wedge" => {
                     let arg = it.next().context("--usb-wedge needs a mode")?;
-                    usb_host_silent_us = Some(parse_host_silent(arg)?);
+                    usb_host_silent = parse_host_silent(arg)?;
+                }
+                "--usb-model" => {
+                    let name = it.next().context("--usb-model needs a name")?;
+                    usb_model = StickModel::parse(name).with_context(|| {
+                        format!("--usb-model {name}: expected generic or rpi-flash-drive")
+                    })?;
                 }
                 "--scenario" | "--record" | "--plan" | "--from-log" | "--output" => {
                     bail!("{a} belongs to --scenario, which `boot` takes out before this point")
@@ -1351,8 +1370,13 @@ impl BootOpts {
         if sd.is_some() && emmc.is_some() {
             bail!("--sd and --emmc are the same host: give one");
         }
-        if usb_host_silent_us.is_some() && usb.is_none() {
-            bail!("--usb-wedge changes the --usb stick: give --usb too");
+        if (usb_host_silent != HostSilent::Model || usb_model != StickModel::Generic)
+            && usb.is_none()
+        {
+            bail!("--usb-model and --usb-wedge change the --usb stick: give --usb too");
+        }
+        if usb_model == StickModel::RpiFlashDrive && usb_uas == UsbUas::On {
+            bail!("--usb-uas is for the generic stick: the Raspberry Pi USB Flash Drive does UAS already");
         }
         if usb_uas != UsbUas::Off && usb.is_none() {
             bail!("--usb-uas and --usb-uas-refuse change the --usb stick: give --usb too");
@@ -1376,7 +1400,8 @@ impl BootOpts {
             usb_mb,
             otg_dock,
             usb_uas,
-            usb_host_silent_us,
+            usb_model,
+            usb_host_silent,
             display,
             display_edid,
             max_steps,
@@ -1726,14 +1751,17 @@ fn open_log(opts: &BootOpts) -> Result<Log> {
     Ok(Log::new(opts.log, out))
 }
 
-/// `host-silent:<seconds>`, as microseconds.
-fn parse_host_silent(arg: &str) -> Result<u64> {
-    let seconds = arg
-        .strip_prefix("host-silent:")
-        .with_context(|| format!("--usb-wedge {arg}: expected host-silent:<seconds>"))?;
+/// `host-silent:<seconds>` or `host-silent:off`.
+fn parse_host_silent(arg: &str) -> Result<HostSilent> {
+    let seconds = arg.strip_prefix("host-silent:").with_context(|| {
+        format!("--usb-wedge {arg}: expected host-silent:<seconds> or host-silent:off")
+    })?;
+    if seconds == "off" {
+        return Ok(HostSilent::Off);
+    }
     match seconds.parse::<f64>() {
-        Ok(s) if s.is_finite() && s >= 0.0 => Ok((s * 1e6) as u64),
-        _ => bail!("--usb-wedge {arg}: the time must be a number of seconds"),
+        Ok(s) if s.is_finite() && s >= 0.0 => Ok(HostSilent::AfterUs((s * 1e6) as u64)),
+        _ => bail!("--usb-wedge {arg}: the time must be a number of seconds, or off"),
     }
 }
 
@@ -1995,15 +2023,27 @@ impl<'a> Rig<'a> {
                 .attach_eeprom(pimu::periph::hat::HatEeprom::new(bytes));
         }
         if let Some(disk) = &self.usb_disk {
-            let stick: Box<dyn pimu::periph::usb::UsbDevice> = match self.opts.usb_uas {
-                UsbUas::Off => Box::new(pimu::periph::usb::MassStorage::with_disk(disk.clone())),
-                UsbUas::On => Box::new(pimu::periph::usb::UasStorage::with_disk(disk.clone())),
-                UsbUas::Refused => {
-                    Box::new(pimu::periph::usb::UasStorage::with_disk(disk.clone()).refusing_uas())
-                }
-            };
+            use pimu::periph::usb::{MassStorage, UasStorage};
+            let stick: Box<dyn pimu::periph::usb::UsbDevice> =
+                match (self.opts.usb_model, self.opts.usb_uas) {
+                    (StickModel::RpiFlashDrive, UsbUas::Refused) => {
+                        Box::new(UasStorage::rpi_flash_drive(disk.clone()).refusing_uas())
+                    }
+                    (StickModel::RpiFlashDrive, _) => {
+                        Box::new(UasStorage::rpi_flash_drive(disk.clone()))
+                    }
+                    (StickModel::Generic, UsbUas::Off) => {
+                        Box::new(MassStorage::with_disk(disk.clone()))
+                    }
+                    (StickModel::Generic, UsbUas::On) => {
+                        Box::new(UasStorage::with_disk(disk.clone()))
+                    }
+                    (StickModel::Generic, UsbUas::Refused) => {
+                        Box::new(UasStorage::with_disk(disk.clone()).refusing_uas())
+                    }
+                };
             machine.pcie.endpoint.attach(USB_ROOT_PORT, stick);
-            if let Some(limit_us) = self.opts.usb_host_silent_us {
+            if let Some(limit_us) = self.opts.usb_host_silent.limit_us(self.opts.usb_model) {
                 machine.pcie.endpoint.xhci.set_host_silent_limit(limit_us);
             }
         }
@@ -3157,8 +3197,15 @@ mod tests {
         "https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/";
 
     #[test]
-    fn usb_wedge_host_silent_takes_seconds_and_needs_a_stick() {
-        assert_eq!(parse_host_silent("host-silent:13.4").unwrap(), 13_400_000);
+    fn usb_wedge_host_silent_takes_seconds_or_off_and_needs_a_stick() {
+        assert_eq!(
+            parse_host_silent("host-silent:13.4").unwrap(),
+            HostSilent::AfterUs(13_400_000)
+        );
+        assert_eq!(
+            parse_host_silent("host-silent:off").unwrap(),
+            HostSilent::Off
+        );
         assert!(parse_host_silent("host-silent:-1").is_err());
         assert!(parse_host_silent("host-silent:soon").is_err());
         assert!(parse_host_silent("deaf").is_err());
@@ -3174,7 +3221,60 @@ mod tests {
         let o = parse(&["--usb", "stick.img", "--usb-wedge", "host-silent:5"])
             .unwrap()
             .unwrap();
-        assert_eq!(o.usb_host_silent_us, Some(5_000_000));
+        assert_eq!(o.usb_host_silent, HostSilent::AfterUs(5_000_000));
+        let o = parse(&["--usb", "stick.img"]).unwrap().unwrap();
+        assert_eq!(o.usb_host_silent, HostSilent::Model);
+    }
+
+    #[test]
+    fn usb_model_picks_the_stick_and_needs_one() {
+        let parse = |extra: &[&str]| {
+            let mut a = vec!["--eeprom", "pieeprom.bin"];
+            a.extend_from_slice(extra);
+            BootOpts::parse(&args(&a), Path::new(""))
+        };
+        assert!(
+            parse(&["--usb-model", "rpi-flash-drive"]).is_err(),
+            "needs --usb"
+        );
+        assert!(parse(&["--usb", "s.img", "--usb-model", "floppy"]).is_err());
+        let o = parse(&["--usb", "s.img", "--usb-model", "rpi-flash-drive"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.usb_model, StickModel::RpiFlashDrive);
+        assert_eq!(
+            o.usb_host_silent.limit_us(o.usb_model),
+            Some(pimu::periph::usb::RPI_FLASH_DRIVE_HOST_SILENT_US)
+        );
+        let o = parse(&[
+            "--usb",
+            "s.img",
+            "--usb-model",
+            "rpi-flash-drive",
+            "--usb-wedge",
+            "host-silent:off",
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.usb_host_silent.limit_us(o.usb_model), None);
+        let o = parse(&["--usb", "s.img"]).unwrap().unwrap();
+        assert_eq!(o.usb_model, StickModel::Generic);
+        assert_eq!(
+            o.usb_host_silent.limit_us(o.usb_model),
+            None,
+            "generic never wedges"
+        );
+        assert!(
+            parse(&[
+                "--usb",
+                "s.img",
+                "--usb-model",
+                "rpi-flash-drive",
+                "--usb-uas"
+            ])
+            .is_err(),
+            "the preset is UAS already"
+        );
     }
 
     #[test]

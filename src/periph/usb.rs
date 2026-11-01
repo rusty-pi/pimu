@@ -23,6 +23,72 @@ use std::rc::Rc;
 pub use super::disk::Disk;
 use super::disk::BLOCK_SIZE;
 
+/// Which stick sits in blue socket A (`--usb`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum StickModel {
+    /// The Samsung Bulk-Only stick, measured on a Raspberry Pi 4B d03115; with
+    /// `--usb-uas` the invented UAS one.
+    #[default]
+    Generic,
+    /// The official Raspberry Pi USB Flash Drive (`2e8a:0030`), measured on a
+    /// Raspberry Pi 4B d03115, which also takes no address when its host stays
+    /// silent for too long after a warm reset.
+    RpiFlashDrive,
+}
+
+/// The host-silent limit of [`StickModel::RpiFlashDrive`], in model
+/// microseconds. The board's limit is about 13.4 s from the warm reset; the
+/// model reaches Linux's first xHCI access 2.7 times later, so this is the
+/// value that, for the shortest signed config (a 14 MiB signed `boot.img` of
+/// the official files, `boot_delay=2`), lies 1 s under that access (36.2 s)
+/// and 1 s over the one with `boot_delay=0` (34.2 s).
+pub const RPI_FLASH_DRIVE_HOST_SILENT_US: u64 = 35_200_000;
+
+impl StickModel {
+    /// The name `--usb-model` and the web page use.
+    pub fn name(self) -> &'static str {
+        match self {
+            StickModel::Generic => "generic",
+            StickModel::RpiFlashDrive => "rpi-flash-drive",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<StickModel> {
+        [StickModel::Generic, StickModel::RpiFlashDrive]
+            .into_iter()
+            .find(|m| m.name() == name)
+    }
+
+    /// What the model does when the host stays silent, unless told otherwise.
+    pub fn default_host_silent_us(self) -> Option<u64> {
+        match self {
+            StickModel::Generic => None,
+            StickModel::RpiFlashDrive => Some(RPI_FLASH_DRIVE_HOST_SILENT_US),
+        }
+    }
+}
+
+/// What `--usb-wedge host-silent:` says: nothing (the model's own limit), no
+/// limit at all, or a limit of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HostSilent {
+    #[default]
+    Model,
+    Off,
+    AfterUs(u64),
+}
+
+impl HostSilent {
+    /// The limit in force for `model`, `None` for a stick that never wedges.
+    pub fn limit_us(self, model: StickModel) -> Option<u64> {
+        match self {
+            HostSilent::Model => model.default_host_silent_us(),
+            HostSilent::Off => None,
+            HostSilent::AfterUs(us) => Some(us),
+        }
+    }
+}
+
 /// The `PORTSC` / slot-context speed encoding (xHCI 4.19.7).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Speed {
@@ -613,6 +679,8 @@ pub struct MassStorage {
     speed: Speed,
     /// A card reader with no card answers every medium command NOT READY.
     medium: bool,
+    /// INQUIRY vendor, product and revision.
+    inquiry: ([u8; 8], [u8; 16], [u8; 4]),
 }
 
 impl MassStorage {
@@ -650,7 +718,14 @@ impl MassStorage {
             phase: BotPhase::Command,
             speed: Speed::Super,
             medium: true,
+            inquiry: (*b"Samsung ", *b"Flash Drive FIT ", *b"1100"),
         }
+    }
+
+    /// Answer INQUIRY with another vendor, product and revision.
+    pub fn with_inquiry(mut self, vendor: [u8; 8], product: [u8; 16], revision: [u8; 4]) -> Self {
+        self.inquiry = (vendor, product, revision);
+        self
     }
 
     /// The card reader of a dock with no card in it: it enumerates like a
@@ -712,9 +787,9 @@ impl MassStorage {
                 d[2] = 0x06;
                 d[3] = 0x02;
                 d[4] = 31;
-                d[8..16].copy_from_slice(b"Samsung ");
-                d[16..32].copy_from_slice(b"Flash Drive FIT ");
-                d[32..36].copy_from_slice(b"1100");
+                d[8..16].copy_from_slice(&self.inquiry.0);
+                d[16..32].copy_from_slice(&self.inquiry.1);
+                d[32..36].copy_from_slice(&self.inquiry.2);
                 (d, 0)
             }
             0x25 => {
@@ -946,6 +1021,12 @@ const UAS_MAX_STREAMS: u8 = 4;
 /// One endpoint with its SuperSpeed companion, and for UAS its pipe usage
 /// descriptor.
 fn ss_endpoint(address: u8, max_streams: u8, pipe: Option<u8>) -> Vec<u8> {
+    ss_endpoint_burst(address, 15, max_streams, pipe)
+}
+
+/// [`ss_endpoint`] with the companion's `bMaxBurst` (one less than the packets
+/// per burst).
+fn ss_endpoint_burst(address: u8, burst: u8, max_streams: u8, pipe: Option<u8>) -> Vec<u8> {
     let mut d = vec![
         0x07,
         0x05,
@@ -956,10 +1037,10 @@ fn ss_endpoint(address: u8, max_streams: u8, pipe: Option<u8>) -> Vec<u8> {
         0x00, // endpoint, 1024 bytes
         0x06,
         0x30,
-        0x0F,
+        burst,
         max_streams,
         0x00,
-        0x00, // SS companion, burst 16
+        0x00, // SS companion
     ];
     if let Some(id) = pipe {
         d.extend_from_slice(&[0x04, 0x24, id, 0x00]);
@@ -1006,6 +1087,7 @@ struct UasCommand {
 /// descriptor each (command 1, status 2, data-in 3, data-out 4) — with an
 /// invented identity. The SCSI answers are [`MassStorage`]'s.
 pub struct UasStorage {
+    pipes: UasPipes,
     common: CommonState,
     desc: Descriptors,
     bot: MassStorage,
@@ -1017,6 +1099,37 @@ pub struct UasStorage {
     /// IUs for the status pipe, by stream ID.
     status: HashMap<u32, VecDeque<Vec<u8>>>,
 }
+
+/// Which endpoint number carries which UAS pipe: bulk OUT and IN endpoints are
+/// told apart by direction, so the command and data-out pipes are OUT numbers
+/// and the status and data-in pipes IN numbers.
+#[derive(Clone, Copy)]
+struct UasPipes {
+    command: u8,
+    status: u8,
+    data_in: u8,
+    data_out: u8,
+}
+
+/// The invented UAS stick: command 1, status 2, data-in 3, data-out 4.
+const GENERIC_PIPES: UasPipes = UasPipes {
+    command: 1,
+    status: 2,
+    data_in: 3,
+    data_out: 4,
+};
+
+/// The Raspberry Pi USB Flash Drive: data-out 0x01, data-in 0x82, command 0x03,
+/// status 0x84.
+const RPI_PIPES: UasPipes = UasPipes {
+    command: 3,
+    status: 4,
+    data_in: 2,
+    data_out: 1,
+};
+
+/// `MaxStreams` as the companion descriptor encodes it for 8 streams (2^3).
+const RPI_MAX_STREAMS: u8 = 3;
 
 impl UasStorage {
     pub fn new(image: Vec<u8>) -> UasStorage {
@@ -1044,6 +1157,7 @@ impl UasStorage {
         let total = (config.len() as u16).to_le_bytes();
         config[2..4].copy_from_slice(&total);
         UasStorage {
+            pipes: GENERIC_PIPES,
             common: CommonState::default(),
             desc: Descriptors {
                 device: vec![
@@ -1056,6 +1170,62 @@ impl UasStorage {
                 status: 0x00,
             },
             bot: MassStorage::with_disk(disk),
+            alternate: 0,
+            refuse_uas: false,
+            commands: HashMap::new(),
+            status: HashMap::new(),
+        }
+    }
+
+    /// The official Raspberry Pi USB Flash Drive (`2e8a:0030`) as `lsusb -v`
+    /// and `/sys/block/sda/device` showed it on a Raspberry Pi 4B d03115: the
+    /// device, configuration (one interface, Bulk-Only as setting 0 and UAS as
+    /// setting 1 with its own endpoint numbers, burst and stream counts), BOS
+    /// descriptor and INQUIRY identity. The serial number is made up, and the
+    /// SCSI answers are [`MassStorage`]'s.
+    pub fn rpi_flash_drive(disk: Rc<RefCell<Disk>>) -> UasStorage {
+        let mut strings = HashMap::new();
+        strings.insert(0, lang_desc());
+        strings.insert(1, string_desc("Raspberry Pi"));
+        strings.insert(2, string_desc("USB Flash Drive"));
+        strings.insert(3, string_desc("0000000000PIMU01"));
+        let interface = |alt: u8, endpoints: u8, protocol: u8| {
+            vec![0x09, 0x04, 0x00, alt, endpoints, 0x08, 0x06, protocol, 0x00]
+        };
+        let mut config = vec![0x09, 0x02, 0, 0, 0x01, 0x01, 0x00, 0x80, 0x26];
+        config.extend(interface(0, 2, PROTOCOL_BOT));
+        config.extend(ss_endpoint_burst(0x01, 8, 0, None));
+        config.extend(ss_endpoint_burst(0x82, 8, 0, None));
+        config.extend(interface(1, 4, PROTOCOL_UAS));
+        config.extend(ss_endpoint_burst(0x01, 8, RPI_MAX_STREAMS, Some(4)));
+        config.extend(ss_endpoint_burst(0x82, 8, RPI_MAX_STREAMS, Some(3)));
+        config.extend(ss_endpoint_burst(0x03, 0, 0, Some(1)));
+        config.extend(ss_endpoint_burst(0x84, 8, RPI_MAX_STREAMS, Some(2)));
+        let total = (config.len() as u16).to_le_bytes();
+        config[2..4].copy_from_slice(&total);
+        let bos = vec![
+            0x05, 0x0F, 0x16, 0x00, 0x02, // BOS, two capabilities
+            0x07, 0x10, 0x02, 0x06, 0x00, 0x00, 0x00, // USB 2.0 extension: BESL LPM
+            0x0A, 0x10, 0x03, 0x00, 0x0C, 0x00, 0x02, 0x04, 0x04, 0x00, // SuperSpeed
+        ];
+        UasStorage {
+            pipes: RPI_PIPES,
+            common: CommonState::default(),
+            desc: Descriptors {
+                device: vec![
+                    0x12, 0x01, 0x20, 0x03, 0x00, 0x00, 0x00, 0x09, 0x8A, 0x2E, 0x30, 0x00, 0x00,
+                    0x11, 0x01, 0x02, 0x03, 0x01,
+                ],
+                config,
+                bos: Some(bos),
+                strings,
+                status: 0x00,
+            },
+            bot: MassStorage::with_disk(disk).with_inquiry(
+                *b"General ",
+                *b"USB Flash Drive ",
+                *b"1100",
+            ),
             alternate: 0,
             refuse_uas: false,
             commands: HashMap::new(),
@@ -1266,10 +1436,12 @@ impl UsbDevice for UasStorage {
         if self.alternate == 0 {
             return self.bot.data_in(ep, len);
         }
-        match ep {
-            2 => self.status_in(stream),
-            3 => self.data_in_pipe(stream, len),
-            _ => Xfer::Stall,
+        if ep == self.pipes.status {
+            self.status_in(stream)
+        } else if ep == self.pipes.data_in {
+            self.data_in_pipe(stream, len)
+        } else {
+            Xfer::Stall
         }
     }
 
@@ -1277,10 +1449,12 @@ impl UsbDevice for UasStorage {
         if self.alternate == 0 {
             return self.bot.data_out(ep, data);
         }
-        match ep {
-            1 => self.command_iu(data),
-            4 => self.data_out_pipe(stream, data),
-            _ => Xfer::Stall,
+        if ep == self.pipes.command {
+            self.command_iu(data)
+        } else if ep == self.pipes.data_out {
+            self.data_out_pipe(stream, data)
+        } else {
+            Xfer::Stall
         }
     }
 }
@@ -1600,6 +1774,113 @@ mod tests {
         assert_eq!(interfaces, [(0, 0, 2, 0x50), (0, 1, 4, 0x62)]);
         assert_eq!(pipes, [1, 2, 3, 4]);
         assert_eq!(streams, [0, 0, 0, 4, 4, 4]);
+    }
+
+    fn rpi_stick() -> UasStorage {
+        let disk = Rc::new(RefCell::new(Disk::from_vec(vec![0x11; 4 * BLOCK_SIZE])));
+        UasStorage::rpi_flash_drive(disk)
+    }
+
+    /// `lsusb -v` of the stick on a Raspberry Pi 4B d03115.
+    #[test]
+    fn the_raspberry_pi_flash_drive_has_the_measured_descriptors() {
+        let mut dev = rpi_stick();
+        let device = ctrl(&mut dev, 0x80, REQ_GET_DESCRIPTOR, 0x0100, 0, 18);
+        assert_eq!(
+            device,
+            [0x12, 1, 0x20, 3, 0, 0, 0, 9, 0x8A, 0x2E, 0x30, 0, 0, 0x11, 1, 2, 3, 1]
+        );
+        let config = ctrl(&mut dev, 0x80, REQ_GET_DESCRIPTOR, 0x0200, 0, 512);
+        assert_eq!(config.len(), 0x79);
+        assert_eq!(&config[..9], [9, 2, 0x79, 0, 1, 1, 0, 0x80, 38]);
+        let (mut interfaces, mut endpoints, mut streams, mut pipes) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut at = 0;
+        while at < config.len() {
+            let d = &config[at..at + config[at] as usize];
+            match d[1] {
+                4 => interfaces.push((d[2], d[3], d[4], d[7])),
+                5 => endpoints.push((d[2], u16::from_le_bytes([d[4], d[5]]))),
+                0x30 => streams.push((d[2], d[3])),
+                0x24 => pipes.push(d[2]),
+                _ => {}
+            }
+            at += d.len();
+        }
+        assert_eq!(interfaces, [(0, 0, 2, 0x50), (0, 1, 4, 0x62)]);
+        let addresses: Vec<u8> = endpoints.iter().map(|e| e.0).collect();
+        assert_eq!(addresses, [0x01, 0x82, 0x01, 0x82, 0x03, 0x84]);
+        assert!(endpoints.iter().all(|e| e.1 == 1024));
+        assert_eq!(
+            streams,
+            [(8, 0), (8, 0), (8, 3), (8, 3), (0, 0), (8, 3)],
+            "burst and stream exponent of each companion"
+        );
+        assert_eq!(pipes, [4, 3, 1, 2], "data-out, data-in, command, status");
+        let bos = ctrl(&mut dev, 0x80, REQ_GET_DESCRIPTOR, 0x0F00, 0, 64);
+        assert_eq!(bos.len(), 0x16);
+        assert_eq!(&bos[12..], [0x0A, 0x10, 3, 0, 0x0C, 0, 2, 4, 4, 0]);
+        let string = |dev: &mut UasStorage, i: u16| {
+            let s = ctrl(dev, 0x80, REQ_GET_DESCRIPTOR, 0x0300 | i, 0x0409, 255);
+            String::from_utf16(
+                &s[2..]
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
+        assert_eq!(string(&mut dev, 1), "Raspberry Pi");
+        assert_eq!(string(&mut dev, 2), "USB Flash Drive");
+    }
+
+    #[test]
+    fn the_raspberry_pi_flash_drive_answers_inquiry_as_general_usb_flash_drive() {
+        let mut dev = rpi_stick();
+        let mut cbw = vec![0u8; CBW_LEN];
+        cbw[..4].copy_from_slice(&CBW_SIGNATURE.to_le_bytes());
+        cbw[8] = 36;
+        cbw[12] = 0x80;
+        cbw[14] = 6;
+        cbw[15] = 0x12;
+        cbw[19] = 36;
+        assert!(matches!(dev.data_out(1, &cbw), Xfer::Ok(_)));
+        let Xfer::Ok(inquiry) = dev.data_in(2, 36) else {
+            panic!("stall")
+        };
+        assert_eq!(&inquiry[8..16], b"General ");
+        assert_eq!(&inquiry[16..32], b"USB Flash Drive ");
+        assert_eq!(&inquiry[32..36], b"1100");
+    }
+
+    /// Its UAS pipes sit on other endpoints than the invented stick's: the
+    /// command goes out on 0x03 and the status comes in on 0x84.
+    #[test]
+    fn the_raspberry_pi_flash_drive_runs_uas_on_its_own_endpoints() {
+        let mut dev = rpi_stick();
+        ctrl(&mut dev, 0x01, REQ_SET_INTERFACE, 1, 0, 0);
+        let mut cdb = [0u8; 10];
+        cdb[0] = 0x28;
+        cdb[5] = 2;
+        cdb[8] = 1;
+        assert!(matches!(
+            dev.data_out_stream(3, 0, &uas_command(5, &cdb)),
+            Xfer::Ok(_)
+        ));
+        assert!(
+            matches!(dev.data_out_stream(1, 0, &uas_command(6, &cdb)), Xfer::Nak),
+            "endpoint 1 is the data-out pipe here, not the command pipe"
+        );
+        assert!(matches!(dev.data_in_stream(4, 6, 128), Xfer::Nak));
+        let Xfer::Ok(iu) = dev.data_in_stream(4, 5, 128) else {
+            panic!("no status IU")
+        };
+        assert_eq!(iu, vec![IU_READ_READY, 0, 0, 5]);
+        let Xfer::Ok(data) = dev.data_in_stream(2, 5, 512) else {
+            panic!("no data")
+        };
+        assert_eq!(data, vec![0x11; BLOCK_SIZE]);
+        assert!(matches!(dev.data_in_stream(4, 5, 128), Xfer::Ok(_)));
     }
 
     #[test]

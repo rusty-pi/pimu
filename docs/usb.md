@@ -9,7 +9,8 @@ port 2). The model is in `src/periph/usb.rs`; the host controller side is
 | `--usb <img>` | Bulk-Only Transport only, with the descriptors measured on a Raspberry Pi 4B d03115 and a Samsung "Flash Drive FIT". |
 | `--usb <img> --usb-uas` | A UAS stick: one interface with Bulk-Only as alternate setting 0 and USB Attached SCSI as setting 1. |
 | `--usb <img> --usb-uas-refuse` | The same, but the stick stalls `SET_INTERFACE` to setting 1, so a host has to stay on Bulk-Only. |
-| `--usb <img> --usb-wedge host-silent:<seconds>` | Any of the above, but it refuses an address when the host first runs later than that after reset. See [A stick that wedges](#a-stick-that-wedges). |
+| `--usb <img> --usb-model rpi-flash-drive` | The official Raspberry Pi USB Flash Drive (`2e8a:0030`), with the descriptors of a real one, and its wedge. See [The Raspberry Pi USB Flash Drive](#the-raspberry-pi-usb-flash-drive). |
+| `--usb <img> --usb-wedge host-silent:<seconds>` | Any of the above, but it refuses an address when the host first runs later than that after reset. `host-silent:off` turns it off. See [A stick that wedges](#a-stick-that-wedges). |
 
 `--otg` is always Bulk-Only.
 
@@ -91,6 +92,38 @@ This needs a nuboot build, so it is not part of `cargo test`; the unit tests in
 `usb.rs` and `xhci.rs` cover the IUs, the streams, `Set TR Dequeue Pointer` and
 the deconfigure.
 
+## The Raspberry Pi USB Flash Drive
+
+`--usb-model rpi-flash-drive` (the web page's "Stick model") plugs in the
+official Raspberry Pi USB Flash Drive instead of the Samsung stick, which stays
+the default under the name `generic`. The identity comes from `lsusb -v` and
+`/sys/block/sda/device` of a real one on a Raspberry Pi 4B d03115:
+
+* device `2e8a:0030`, `bcdUSB` 3.20, 9 for `bMaxPacketSize0`, `bcdDevice`
+  11.00, manufacturer `Raspberry Pi`, product `USB Flash Drive`, bus powered at
+  304 mA;
+* one configuration with one interface and two settings: Bulk-Only (`0x50`, bulk
+  OUT `0x01` and IN `0x82`, 1024 bytes, burst 8) and UAS (`0x62`): data-out on
+  `0x01` and data-in on `0x82` with 8 streams and burst 8, the command pipe on
+  `0x03` with burst 0 and no streams, the status pipe on `0x84` with 8 streams
+  and burst 8 (the invented `--usb-uas` stick has them on `0x01`, `0x82`, `0x83`
+  and `0x04` with 16 streams);
+* a BOS descriptor with a USB 2.0 extension (BESL LPM) and a SuperSpeed
+  capability (speeds `0x0c`, functionality support 2, U1 and U2 exit latency 4
+  us);
+* SCSI `INQUIRY`: vendor `General `, product `USB Flash Drive `, revision
+  `1100`.
+
+Not modelled: the serial number, which is made up; the capacity, which is the
+disk image's; the SCSI answers beyond the generic stick's (no other command was
+captured, and nothing is known of how the real stick answers `MODE SENSE` or
+`SYNCHRONIZE CACHE`); any timing of the flash; LPM, U1 and U2, which the BOS
+descriptor advertises and the controller model never uses; and bus power.
+`--usb-uas` does not apply to it, since it is a UAS stick; `--usb-uas-refuse`
+does.
+
+The preset also wedges, by default: see below.
+
 ## A stick that wedges
 
 A Raspberry Pi flash drive (`2e8a:0030`, UAS) behind the VL805 of a Raspberry
@@ -107,6 +140,10 @@ is at 13.2 s (`boot_delay=1.5` and `1.75`, the stick works) and 13.5 s
 The same happens with every `start4.elf` and every bootloader tried that can
 load a signed image. Why the stick does it is not known.
 
+**The wedge is a model of an observed behaviour whose cause is not known.** It
+may be the stick, the VL805 or the pairing, and what is modelled is only the
+dependence on the time of the first host contact that the measurements show.
+
 `--usb-wedge host-silent:<seconds>` models that and nothing else, with the one
 parameter: a stick that stayed powered through a reset of the SoC (see [Warm
 reset](#warm-reset)) takes the first time the xHCI controller runs (`USBCMD.RS`)
@@ -114,11 +151,14 @@ after that reset as the first it hears of a host again, and when that is later
 than `<seconds>` every `Address Device` for a SuperSpeed device fails with USB
 Transaction Error. The first boot after a power-on never wedges the stick. A
 controller run before the limit, or a later one, changes nothing, and the
-BCM2711's own xHCI and USB 2.0 devices are not touched. It needs `--usb`, works
-with `--usb-uas`, and is a command line option only.
+BCM2711's own xHCI and USB 2.0 devices are not touched. It needs `--usb` and
+works with every stick model. The `rpi-flash-drive` model wedges by default, with
+the limit below (`RPI_FLASH_DRIVE_HOST_SILENT_US` in `src/periph/usb.rs`);
+`host-silent:<seconds>` puts another one in its place and `host-silent:off`
+turns it off. The generic stick never wedges unless given a limit.
 
-The cause is not known. A guess, not proven: the stick starts a timer when it
-loses a host it had, not at power-on.
+A guess, not proven: the stick starts a timer when it loses a host it had, not
+at power-on.
 
 The limit is model time, and the model's time is not the board's: the
 bootloader's first stage takes about the same, but a 30 MiB `boot.img` takes 41 s
@@ -128,7 +168,8 @@ shortest signed config, a 14 MiB `boot.img` of the official `start4.elf`,
 `fixup4.dat`, device tree and `kernel8.img` signed with the test key
 (`testdata/netboot/test-signing-key.pem`), SD first, Linux's first xHCI access
 is at 36.2 s with `boot_delay=2` in `config.txt` and 2.0 s earlier with
-`boot_delay=0`: a limit of `35.2` wedges the first and not the second. The same
+`boot_delay=0`: a limit of `35.2`, the preset's default, wedges the first and not
+the second. The board's own limit, about 13.4 s, is what it stands for. The same
 card with `SIGNED_BOOT=0` runs the controller at 1.7 s, in the bootloader, and
 never wedges, as the stick on the board does not. A signed boot only skips the
 bootloader's early USB bring-up when `MBOX5` keeps the secure-boot mark; see
@@ -136,16 +177,17 @@ bootloader's early USB bring-up when `MBOX5` keeps the secure-boot mark; see
 
 ```bash
 pimu boot --eeprom pieeprom-signed.bin --bootconf SIGNED_BOOT=1 \
-  --sd card.img --usb stick.img --usb-wedge host-silent:35.2
+  --sd card.img --usb stick.img --usb-model rpi-flash-drive
 ```
 
 `pieeprom-signed.bin` is the official EEPROM image with the test key's public
 half in its `pubkey.bin` slot (`--eeprom-pubkey`), and `card.img` holds the
 files as they are (read when `SIGNED_BOOT=0`) beside `boot.img` and `boot.sig`.
 
-Unit tests in `xhci.rs` check the limit: the first run at the limit works, a
-microsecond later wedges, a later controller reset does not start the clock
-again, and a stick that was just powered on never wedges. A test in `boot.rs`
+The same boot with `--usb-wedge host-silent:off`, or with `SIGNED_BOOT=0`, finds
+the stick. Unit tests in `xhci.rs` check the limit: the first run at the limit
+works, a microsecond later wedges, a later controller reset does not start the
+clock again, and a stick that was just powered on never wedges. A test in `boot.rs`
 checks that a reset carries the stick over and a power-on does not.
 
 ## Warm reset
