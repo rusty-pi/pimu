@@ -250,7 +250,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7460124K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
+[t] Memory: 7459948K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -515,7 +515,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7460124K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
+[t] Memory: 7459948K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243284K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -737,20 +737,20 @@ rdid=ef3013
 
 do devmem 0xfe204004 32 $b; done; devmem 0xfe204000 32 0xa3; for b in 0 0 0 0; d
 
-o devmem 0xfe204004 32 $b; done; printf 'magic=%02x%02x%02x%02x\n' $(devmem 0xfe
+o devmem [t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
+[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
+0x[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+f[t] usb 1-1: Product: USB2.0 Hub
+[t] usb 1-1: Product: USB2.0 Hub
+e204004 32 $b; done; p[t] hub 1-1:1.0: USB hub found
+[t] hub 1-1:1.0: USB hub found
+[t] hub 1-1:1.0: 4 ports detected
+[t] hub 1-1:1.0: 4 ports detected
+rintf 'magic=%02x%02x%02x%02x\n' $(devmem 0xfe
 
 204004 32) $(devmem 0xfe204004 32) $(devmem 0xfe204004 32) $(devmem 0xfe204004 3
 
 2); devmem 0xfe204000 32 0x33; devmem 0xfe200020 32 0x800
-[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
-[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
-[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
-[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
-[t] usb 1-1: Product: USB2.0 Hub
-[t] usb 1-1: Product: USB2.0 Hub
-[t] hub 1-1:1.0: USB hub found
-[t] hub 1-1:1.0: USB hub found
-[t] hub 1-1:1.0: 4 ports detected
-[t] hub 1-1:1.0: 4 ports detected
 magic=55aaf00f
 / # 

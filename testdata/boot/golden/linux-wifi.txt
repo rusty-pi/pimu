@@ -235,7 +235,7 @@ MESS:[t]:0: uart: Baud rate change done...
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459880K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
+[t] Memory: 7459816K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -502,7 +502,7 @@ MESS:[t]:0: uart: Baud rate change done...
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459880K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
+[t] Memory: 7459816K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -715,9 +715,9 @@ Enter 'help' for a list of built-in commands.
 
 / # \x1b[6nM=/lib/modules/$(uname -r)/kernel
 / # \x1b[6ninsmod $M/net/rfkill/rfkill.ko
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 / # \x1b[6ninsmod $M/net/wireless/cfg80211.ko
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
-[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] cfg80211: Loading compiled-in X.509 certificates for regulatory database
 [t] Loaded X.509 cert 'benh@debian.org: 577e021cb980e0e820821ba7b54b4961b8b4fadf'
@@ -733,19 +733,19 @@ Enter 'help' for a list of built-in commands.
 [t] cfg80211: failed to load regulatory.db
 [t] cfg80211: failed to load regulatory.db
 / # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmutil/brcmutil.ko
+[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
+[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
+[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+[t] usb 1-1: Product: USB2.0 Hub
+[t] usb 1-1: Product: USB2.0 Hub
+[t] hub 1-1:1.0: USB hub found
+[t] hub 1-1:1.0: USB hub found
+[t] hub 1-1:1.0: 4 ports detected
+[t] hub 1-1:1.0: 4 ports detected
 / # \x1b[6ninsmod $M/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko; slee
 
 p 9; ip link; dmesg | tail -40
-[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
-[t] usb 1-1: New USB device found, idVendor=2109, idProduct=3431, bcdDevice= 4.21
-[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
-[t] usb 1-1: New USB device strings: Mfr=0, Product=1, SerialNumber=0
-[t] usb 1-1: Product: USB2.0 Hub
-[t] usb 1-1: Product: USB2.0 Hub
-[t] hub 1-1:1.0: USB hub found
-[t] hub 1-1:1.0: USB hub found
-[t] hub 1-1:1.0: 4 ports detected
-[t] hub 1-1:1.0: 4 ports detected
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] brcmfmac: brcmf_fw_alloc_request: using brcm/brcmfmac43455-sdio for chip BCM4345/6
 [t] usbcore: registered new interface driver brcmfmac
@@ -809,7 +809,7 @@ p 9; ip link; dmesg | tail -40
     link/ether b8:27:eb:74:f2:6c brd ff:ff:ff:ff:ff:ff
 / # \x1b[6niw dev wlan0 scan
 BSS 02:00:5e:00:53:04(on wlan0)
-	last seen: 13.130s [boottime]
+	last seen: 13.209s [boottime]
 	TSF: 0 usec (0d, 00:00:00)
 	freq: 2412.0
 	beacon interval: 100 TUs
