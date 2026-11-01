@@ -29,7 +29,7 @@ Each line is acked through the word named after it. Neither core enables them on
 | `0x080` | [`STATUS`](#status) | r | 32 | 3, best high |
 | `0x084` | [`ACK76`](#ack76) | rw | 32 | 2, best medium |
 | `0x088` | [`ACK77`](#ack77) | rw | 32 | 2, best medium |
-| `0x0B4` | [`MBOX5`](#mbox5) | rw | 32 | 2, best high |
+| `0x0B4` | [`MBOX5`](#mbox5) | rw | 32 | 3, best high |
 | `0x0BC` | [`MBOX7`](#mbox7) | rw | 32 | 2, best high |
 | `0x0C0` | [`VPUSEMA0`](#vpusema0) | rw | 32 | 4, best high |
 | `0x090`–`0x094` (2 × 0x4) | [`ICSET`](#icset) | rw | 32 | 2, best high |
@@ -90,11 +90,12 @@ Sources:
 
 Offset `0x0B4` · access `rw` · 32 bits
 
-Mailbox word 5, which the model used to call `SECURE_MARK`. Both bootloader stages write 0 here as they start, OR bit 31 of it into their secure-boot flags each time they work them out, and set bit 31 once any flag is set (`SIGNED_BOOT`, or the OTP secure-boot rows), so a later look within the stage sees secure boot even if the settings no longer say so. Reads 0 in the model, so there every look starts afresh.
+Mailbox word 5, which the model used to call `SECURE_MARK`. Both bootloader stages write 0 here as they start, OR bit 31 of it into their secure-boot flags each time they work them out, and set bit 31 once any flag is set (`SIGNED_BOOT`, or the OTP secure-boot rows), so a later look within the stage sees secure boot even if the settings no longer say so. That mark is what makes the bootloader skip its early PCIe and USB bring-up on a signed boot: with it set, the flag word stage 1 hands to stage 2 (word `0x344` of the `FCEB` config block, set at `0x80000EF4`) stays 0, and stage 2 never posts the `0x86` event that starts the controller (`0x85724`, `0xB60EC`). Plain storage in the model.
 
 Sources:
 
 - decompile (high): EEPROM bootmain: `0xA7B88` (clear at start), `0xA92C6` (read into the flags), `0xA934A` / `0xA9352` (set bit 31 when the flags are non-zero)
+- measured (high): Raspberry Pi 4B d03115, EEPROM 2026-08-04 (`0a7ef05f`), UART logs: with `SIGNED_BOOT=1` the bootloader goes from `SFDP None` to `SD_OC: 0` and `Boot mode: SD (01)` with no `PCI0 init`, `PCIe scan` or `xHC0` lines; with `SIGNED_BOOT=0` it prints them at about 2.7 s, before `Boot mode`. The model reproduces both only when this word keeps its bits
 - trace (high): `--trace-mmio`, `--bootconf SIGNED_BOOT=1`: bootsys writes 0 at `0x80007ED0` and reads / sets it at `0x8000902C`, `0x800090A4` / `0x800090A8`; bootmain clears it, then every flags check reads it twice and writes `0x80000000`
 
 ## `MBOX7`

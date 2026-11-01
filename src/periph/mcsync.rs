@@ -17,33 +17,34 @@
 //! enables source 76 or 77 on the pinned boot (`--log irqen`), so the doorbell
 //! interrupt is not how start4 is woken.
 //!
-//! [`MBOX7`] and [`MBOX6`] are plain storage: the ROM leaves how it booted in
-//! `MBOX7` and the bootcode reads it there, so dropping that write made every
-//! stage report boot mode 0 where a board reports 6. Everything else in the
-//! window reads 0.
+//! [`MBOX7`], [`MBOX6`] and [`MBOX5`] are plain storage: the ROM leaves how it
+//! booted in `MBOX7` and the bootcode reads it there, so dropping that write made
+//! every stage report boot mode 0 where a board reports 6, and the bootloader
+//! marks secure boot in `MBOX5`. Everything else in the window reads 0.
 
 use crate::bus::{BusResult, MmioDevice, Width};
-use crate::spec::mcsync::{MBOX6, MBOX7, SEMA, SEMA_COUNT, SEMA_STRIDE, STATUS};
+use crate::spec::mcsync::{MBOX5, MBOX6, MBOX7, SEMA, SEMA_COUNT, SEMA_STRIDE, STATUS};
 use crate::spec::Coverage;
 
 pub const COVERAGE: Coverage = Coverage {
     block: "mcsync",
-    decoded: &[SEMA, STATUS, MBOX6, MBOX7],
+    decoded: &[SEMA, STATUS, MBOX5, MBOX6, MBOX7],
 };
 
-/// The three boot words the ROM and the bootcode pass through this block.
-/// The boot mode the ROM records, and the word it clears beside it. They are
-/// plain storage: the ROM writes the mode and the bootcode reads it back, so a
+/// The boot words the ROM and the bootcode pass through this block.
+/// The boot mode the ROM records, and the word it clears beside it, are plain
+/// storage: the ROM writes the mode and the bootcode reads it back, so a
 /// window that answers 0 makes every stage report boot mode 0 where a board
-/// reports 6. `MBOX5` (the secure-boot mark) still reads 0 -- giving it
-/// storage would change what the signed-boot scenarios exercise.
-const BOOT_WORDS: [u32; 2] = [MBOX6, MBOX7];
+/// reports 6. `MBOX5` is the secure-boot mark the bootloader stages set once a
+/// secure-boot flag is on; it has to keep it, or a signed boot starts the
+/// PCIe and USB bring-up that a board skips.
+const BOOT_WORDS: [u32; 3] = [MBOX6, MBOX7, MBOX5];
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct McSync {
     held: u32,
     /// [`BOOT_WORDS`], in that order.
-    boot: [u32; 2],
+    boot: [u32; 3],
     /// How many semaphores were taken over the run.
     pub posts: u64,
 }
@@ -146,5 +147,16 @@ mod tests {
     fn the_array_stops_at_32() {
         assert_eq!(SEMA + SEMA_COUNT * SEMA_STRIDE, STATUS);
         assert_eq!(McSync::slot(STATUS), None);
+    }
+
+    /// The secure-boot mark keeps what the bootloader sets in it.
+    #[test]
+    fn the_secure_boot_mark_keeps_its_bits() {
+        let mut m = McSync::new();
+        assert_eq!(m.read(MBOX5, Width::Word).unwrap(), 0);
+        m.write(MBOX5, Width::Word, 0x8000_0000).unwrap();
+        assert_eq!(m.read(MBOX5, Width::Word).unwrap(), 0x8000_0000);
+        m.write(MBOX5, Width::Word, 0).unwrap();
+        assert_eq!(m.read(MBOX5, Width::Word).unwrap(), 0);
     }
 }
