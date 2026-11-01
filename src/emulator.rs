@@ -485,7 +485,8 @@ impl Emulator {
             self.machine.watch_core = 0;
         }
         let step = self.cpu.step(&mut self.machine);
-        self.machine.tick(1);
+        let cycles = self.step_cycles();
+        self.machine.tick(cycles);
         self.post_step(st, limits, pc_before, step, Resume::Core0)
     }
 
@@ -884,6 +885,14 @@ impl Emulator {
         st.delay_ff_handler_reads = 0;
     }
 
+    /// The cycle units core 0's last step took: its instruction, a penalty if it
+    /// took a branch, and what its device accesses made it wait for.
+    #[inline]
+    fn step_cycles(&mut self) -> u64 {
+        self.machine.step_cycles()
+            + std::mem::take(&mut self.cpu.taken_pending) * crate::timing::TAKEN_BRANCH_UNITS
+    }
+
     /// Core 1's step: one per core-0 step, over the shared bus.
     #[inline]
     fn step_core1(&mut self, st: &mut RunState) {
@@ -1011,7 +1020,8 @@ impl Emulator {
                 }
                 let step = self.cpu.step(&mut self.machine);
                 n += 1;
-                self.machine.tick(1);
+                let cycles = self.step_cycles();
+                self.machine.tick(cycles);
                 if self.machine.recheck | self.cpu.recheck {
                     break 'run self.post_step(st, limits, pc, step, Resume::Core0);
                 }

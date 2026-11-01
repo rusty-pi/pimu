@@ -69,6 +69,8 @@ pub struct Sdramc {
     /// firmware verifies each rank with byte-identical PHY parameters, so this
     /// count stands in for "which rank is being trained" in the result word.
     sig_cal_count: u32,
+    /// Microseconds of calibration started since [`Sdramc::take_training_us`].
+    training_us: u64,
     /// The memsys signature the model reports, latched from the version marker
     /// the firmware wrote to the PHY_B array (see [`Sdramc::report_signature`]).
     /// It is a property of the loaded memsys, so it is kept across the later
@@ -90,6 +92,7 @@ impl Sdramc {
             storage: BTreeMap::new(),
             cmd_done: true,
             sig_cal_count: 0,
+            training_us: 0,
             phy_sig: PHY_SIGNATURE,
             log: Vec::new(),
             log_limit: 8192,
@@ -138,7 +141,14 @@ impl Sdramc {
         self.phy_sig
     }
 
+    /// How long the calibrations started since the last call took, which the
+    /// VPU spends waiting for them.
+    pub fn take_training_us(&mut self) -> u64 {
+        std::mem::take(&mut self.training_us)
+    }
+
     fn run_phy_cal(&mut self) {
+        self.training_us += crate::timing::PHY_CAL_US;
         let (signature, status) = if self.word(PHY_RES_CMD) == PHY_CMD_REPORT_SIGNATURE {
             let rank = self.sig_cal_count;
             self.sig_cal_count += 1;

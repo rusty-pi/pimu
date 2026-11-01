@@ -6,7 +6,7 @@
 - Base: `0x7DC00000`
 - Size: `0x40000`
 
-DRAM is not simulated electrically: every training step reports success with the values the firmware's self-consistency checks expect. The PHY preset arrays copied in from `memsysNN.bin` read straight back. The per-byte-lane PHY blocks around `+0x400..+0xC00` and `+0x30000` are plain storage and not listed.
+DRAM is not simulated electrically: every training step reports success with the values the firmware's self-consistency checks expect. Each `PHY_CAL_TRIGGER` write of 1 holds the VPU for 54 ms, which is how long the board's bootloader takes for the 27 handshakes between its `DDR 3200 Mbps` and `SD_SB` lines (1.47 s on a Raspberry Pi 4B d03115, EEPROM `0a7ef05f`). The PHY preset arrays copied in from `memsysNN.bin` read straight back. The per-byte-lane PHY blocks around `+0x400..+0xC00` and `+0x30000` are plain storage and not listed.
 
 Sources:
 

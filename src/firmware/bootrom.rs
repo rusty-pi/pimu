@@ -363,6 +363,11 @@ impl BootRom {
         }
 
         self.leave_rom_state(machine);
+        machine.follow_vpu_clock();
+        machine.systimer.advance_to(
+            crate::timing::ROM_BASE_US
+                + body.len() as u64 * crate::timing::ROM_TENTHS_US_PER_BYTE / 10,
+        );
         write_folded(machine, BOOTCODE_LOAD_ADDR, &body).context("boot ROM: staging bootcode")?;
         machine
             .l2

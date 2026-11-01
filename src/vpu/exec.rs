@@ -167,6 +167,10 @@ pub struct Vpu {
     /// loop's detectors read it every retired instruction, and a plain field
     /// beats the ring's index arithmetic.
     pub cf_last: Option<(u32, u32)>,
+    /// Taken control transfers retired, and the part of them the run loop has
+    /// not yet charged [`crate::timing::TAKEN_BRANCH_CYCLES`] for.
+    pub taken: u64,
+    pub taken_pending: u64,
     /// Push a one-line disassembly of every retired instruction to `trace_log`.
     pub trace: bool,
     pub trace_cf_only: bool,
@@ -664,6 +668,8 @@ impl Vpu {
         if !self.is_stopped() {
             self.retired += 1;
             if self.regs.pc != next {
+                self.taken += 1;
+                self.taken_pending += 1;
                 // `--log derail`: flag the first jump out of the code range.
                 let in_code = |a: u32| (0x3E00_0000..0x3F00_0000).contains(&a);
                 if crate::diag::ON

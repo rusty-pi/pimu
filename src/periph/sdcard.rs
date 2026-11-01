@@ -207,6 +207,13 @@ pub struct SdCard {
     /// OCR busy latch: not-ready once, then ready, so the host's poll loop runs
     /// at least one iteration.
     powered_up: bool,
+    /// Model time of the last [`SdCard::advance_to`], and when the card has
+    /// finished powering up: `ACMD41` answers busy until then.
+    now_us: u64,
+    ready_at_us: Option<u64>,
+    /// Microseconds the host has to wait for the answer just given, taken by
+    /// [`SdCard::take_wait_us`]: the power-up still ahead of an `ACMD41`.
+    wait_us: u64,
     s18a_offered: bool,
     /// 1.8 V signalling: survives CMD0, and only a power cycle undoes it.
     signal_1v8: bool,
@@ -279,6 +286,9 @@ impl SdCard {
             rca: 0,
             app_cmd: false,
             powered_up: false,
+            now_us: 0,
+            ready_at_us: None,
+            wait_us: 0,
             s18a_offered: false,
             signal_1v8: false,
             wide_bus: false,
@@ -341,6 +351,7 @@ impl SdCard {
     /// Bring the WiFi chip's firmware to model time `now_us`.
     #[inline]
     pub fn advance_to(&mut self, now_us: u64) {
+        self.now_us = now_us;
         if let Some(chip) = self.chip.as_mut() {
             chip.advance_to(now_us);
         }
@@ -431,8 +442,13 @@ impl SdCard {
         }
     }
 
+    pub fn take_wait_us(&mut self) -> u64 {
+        std::mem::take(&mut self.wait_us)
+    }
+
     /// Card VDD removed: the signalling voltage included, everything restarts.
     pub fn power_off(&mut self) {
+        self.ready_at_us = None;
         self.state = CardState::Idle;
         self.rca = 0;
         self.app_cmd = false;
@@ -949,7 +965,14 @@ impl SdCard {
             41 => {
                 // SD_SEND_OP_COND: busy once, then ready with CCS, plus S18A if
                 // the host asked for 1.8 V and the card is still at 3.3 V.
-                let ocr = if self.powered_up {
+                let ready_at = *self
+                    .ready_at_us
+                    .get_or_insert(self.now_us + crate::timing::SD_POWER_UP_US);
+                // A host polls a card that is still powering up until it is
+                // ready, which at 400 kHz is hundreds of commands and as many
+                // delays; the first busy answer makes it wait the rest out.
+                self.wait_us = ready_at.saturating_sub(self.now_us);
+                let ocr = if self.powered_up && self.now_us >= ready_at {
                     self.state = CardState::Ready;
                     let s18a = arg & OCR_S18 != 0 && !self.signal_1v8;
                     self.s18a_offered = s18a;
@@ -1171,6 +1194,7 @@ mod tests {
         for _ in 0..2 {
             c.command(55, 0);
             ocr = c.command(41, arg).r1.unwrap();
+            c.advance_to(c.now_us + crate::timing::SD_POWER_UP_US);
         }
         ocr
     }

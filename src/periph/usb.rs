@@ -37,12 +37,14 @@ pub enum StickModel {
 }
 
 /// The host-silent limit of [`StickModel::RpiFlashDrive`], in model
-/// microseconds. The board's limit is about 13.4 s from the warm reset; the
-/// model reaches Linux's first xHCI access 2.7 times later, so this is the
-/// value that, for the shortest signed config (a 14 MiB signed `boot.img` of
-/// the official files, `boot_delay=2`), lies 1 s under that access (36.2 s)
-/// and 1 s over the one with `boot_delay=0` (34.2 s).
-pub const RPI_FLASH_DRIVE_HOST_SILENT_US: u64 = 35_200_000;
+/// microseconds. The board's limit is about 13.4 s from the warm reset by the
+/// host's timestamps, about 12 s by the VPU's own; the model reaches Linux's
+/// first xHCI access a little earlier than the board does, so this is the
+/// midpoint of the model's accesses for the shortest signed config (a 16 MiB
+/// signed `boot.img` of the official files): 11.12 s with `boot_delay=1.75`,
+/// where the stick works on the board, and 11.37 s with `boot_delay=2`, where
+/// it does not.
+pub const RPI_FLASH_DRIVE_HOST_SILENT_US: u64 = 11_250_000;
 
 impl StickModel {
     /// The name `--usb-model` and the web page use.

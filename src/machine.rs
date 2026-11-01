@@ -139,6 +139,9 @@ pub struct Machine {
     /// Loads off the RAM path. The busy-wait detector compares it with the
     /// timer's `clo_reads`: a `udelay` reads nothing else.
     pub mmio_reads: u64,
+    /// Cycle units the VPU has still to wait for hardware the model answers at
+    /// once: [`Self::step_cycles`] hands them to the clock with the step's own.
+    stall_cycles: u64,
 
     /// Record every peripheral access in `mmio_events` as
     /// `(addr, width_bytes, value, is_write)` for the run loop to print.
@@ -326,6 +329,7 @@ impl Machine {
             mmio_writes: 0,
             ram_reads: 0,
             mmio_reads: 0,
+            stall_cycles: 0,
             mmio_trace: false,
             mmio_trace_range: None,
             mmio_events: Vec::new(),
@@ -503,6 +507,42 @@ impl Machine {
         }
         if let Some(uv) = self.bsc_pmic.slave().and_then(|p| p.core_rail_uv()) {
             self.avs.set_core_rail_uv(uv);
+        }
+    }
+
+    /// The cycle units one VPU step takes, for [`Self::tick`]: its instruction, and
+    /// the time the devices it touched kept the VPU waiting.
+    #[inline]
+    pub fn step_cycles(&mut self) -> u64 {
+        1 + std::mem::take(&mut self.stall_cycles)
+    }
+
+    /// Hold the VPU for `us` microseconds of the clock it runs from now.
+    fn stall_for(&mut self, us: u64) {
+        self.stall_cycles += us * self.systimer.cycles_per_us();
+    }
+
+    /// Run the VPU's clock at the rate the clock manager is programmed to.
+    pub fn follow_vpu_clock(&mut self) {
+        self.systimer
+            .set_vpu_hz(self.clockman.vpu_hz() * crate::timing::UNITS_PER_CYCLE);
+    }
+
+    /// Take what the devices a register access touched made the VPU wait for,
+    /// and any change to the clock it runs from.
+    fn settle_device_waits(&mut self) {
+        if self.clockman.take_vpu_change() {
+            self.follow_vpu_clock();
+        }
+        let spi_clocks = self.spi0.take_shift_clocks();
+        if spi_clocks != 0 {
+            self.stall_cycles +=
+                spi_clocks * self.systimer.cycles_per_us() / crate::timing::CORE_MHZ;
+        }
+        let phy_us = self.sdramc.take_training_us();
+        let wire_us = self.emmc2.take_wire_us() + self.emmc.take_wire_us();
+        if phy_us + wire_us != 0 {
+            self.stall_for(phy_us + wire_us);
         }
     }
 
@@ -1228,6 +1268,7 @@ impl Machine {
         if let Some((dev, off)) = self.device_for(addr) {
             let v = dev.read(off, width);
             let got = *v.as_ref().unwrap_or(&0);
+            self.settle_device_waits();
             self.dma_win_log("rd", addr, got);
             if trace {
                 self.mmio_events
@@ -1383,6 +1424,7 @@ impl Machine {
             if self.emmc2.dma_pending() {
                 self.with_dma_master("the EMMC2 DMA", |m| m.emmc2.run_dma(&mut m.ram));
             }
+            self.settle_device_waits();
             // A register write can run a ring, which needs DRAM of its own.
             if self.xhci_otg.write_pending() {
                 self.with_dma_master("the OTG xHCI", |m| m.xhci_otg.run_pending(&mut m.ram));

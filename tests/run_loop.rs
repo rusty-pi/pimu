@@ -472,10 +472,11 @@ fn short_waits_and_timestamps_are_not_jumped() {
     ];
     for (what, code) in runs {
         let (report, emu) = both_payload(code, what);
-        // Unjumped, the counter shows exactly the cycles that ran.
+        // Unjumped, the counter shows exactly the cycles that ran, and what
+        // each taken branch cost.
         assert_eq!(
             emu.machine.systimer.now_us(),
-            report.cycles / CYCLES_PER_US,
+            (report.cycles + emu.cpu.taken * pimu::timing::TAKEN_BRANCH_UNITS) / CYCLES_PER_US,
             "{what}: the counter was jumped"
         );
     }

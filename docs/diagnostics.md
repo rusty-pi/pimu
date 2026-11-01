@@ -96,12 +96,14 @@ Both exist because the failures they model are invisible here otherwise: a
 firmware that never switches a card, or never starts the Ethernet clocks, works
 in this emulator and hangs a Raspberry Pi 4B.
 
-Bus *speeds* stay unmodellable either way. The machine does not follow the
-firmware's clock programming (`systimer.rs` keeps 54 MHz for the whole run), so
-an I²C or SPI divider computed against the wrong core clock — 926 kHz at a part
-that stops answering past 400 kHz, or a flash clocked at 125 MHz — reads exactly
-as correct here. The way to catch those is to diff the divider a firmware writes
-against the one the stock firmware writes at the same point.
+Bus *speeds* are only partly followed. The VPU's own clock comes from the
+firmware's clock programming (`CM_VPUCTL` and the PLLs; see
+[`running.md`](running.md#modelled-time)), but the peripheral clocks are assumed:
+SPI0 and the I²C masters divide a fixed 500 MHz core clock. So an I²C or SPI
+divider computed against the wrong core clock — 926 kHz at a part that stops
+answering past 400 kHz, or a flash clocked at 125 MHz — reads exactly as correct
+here. The way to catch those is to diff the divider a firmware writes against the
+one the stock firmware writes at the same point.
 
 ## Traps and watchpoints
 

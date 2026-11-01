@@ -7,7 +7,7 @@
 - Size: `0x1000`
 - Interrupts: `C0` VPU source 64 · `C1` VPU source 65 · `C2` VPU source 66 · `C3` VPU source 67
 
-Compare channel n raises VPU interrupt source 64 + n when it matches.
+Compare channel n raises VPU interrupt source 64 + n when it matches. The counter is modelled time: it advances by the VPU's instructions at the clock the clock manager gives it, a taken branch's extra cycles and the waits the devices ask for (`src/timing.rs`).
 
 Sources:
 

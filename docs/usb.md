@@ -169,17 +169,18 @@ turns it off. The generic stick never wedges unless given a limit.
 A guess, not proven: the stick starts a timer when it loses a host it had, not
 at power-on.
 
-The limit is model time, and the model's time is not the board's: the
-bootloader's first stage takes about the same, but a 30 MiB `boot.img` takes 41 s
-to verify (5.6 s on the board) and Linux reaches its first xHCI access 2.7 times
-later. So the board's 13.4 s cannot be used; calibrate it per build. For the
-shortest signed config, a 14 MiB `boot.img` of the official `start4.elf`,
-`fixup4.dat`, device tree and `kernel8.img` signed with the test key
-(`testdata/netboot/test-signing-key.pem`), SD first, Linux's first xHCI access
-is at 36.2 s with `boot_delay=2` in `config.txt` and 2.0 s earlier with
-`boot_delay=0`: a limit of `35.2`, the preset's default, wedges the first and not
-the second. The board's own limit, about 13.4 s, is what it stands for. The same
-card with `SIGNED_BOOT=0` runs the controller at 1.7 s, in the bootloader, and
+The limit is model time, which follows a Raspberry Pi 4B d03115's within about
+10% ([`running.md`](running.md#modelled-time)) but not exactly: the model
+reaches Linux's first xHCI access about 0.7 s earlier than the board does (an estimate from the VPU's stamps), so
+the board's figures cannot be copied. Calibrate against the same pair of
+configurations instead. For the shortest signed config, a 16 MiB `boot.img` of
+the official `start4.elf`, `fixup4.dat`, device tree and `kernel8.img`, SD first,
+the model's first access is at 11.12 s with `boot_delay=1.75` in `config.txt`
+(the stick works on the board) and 11.37 s with `boot_delay=2` (it wedges), and
+9.37 s with `boot_delay=0`: a limit of `11.25` keeps the first and wedges the
+second. The board's host-stamped 13.2 s and 13.5 s are about 1.4 s later than
+the VPU's own stamps put them, because the serial log lags the console by its
+backlog. The same card with `SIGNED_BOOT=0` runs the controller at 2.8 s, in the bootloader, and
 never wedges, as the stick on the board does not. A signed boot only skips the
 bootloader's early USB bring-up when `MBOX5` keeps the secure-boot mark; see
 [`periph/mcsync.md`](periph/mcsync.md).

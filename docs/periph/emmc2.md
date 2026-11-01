@@ -7,7 +7,7 @@
 - Size: `0x1000`
 - Interrupts: VPU source 126 · GIC id 158 (`GIC_SPI 126`)
 
-Command engine wired to a modelled card, with PIO, SDMA and ADMA2 (32-bit) data paths. Every register is a 32-bit word here; narrow accesses pick their lane.
+Command engine wired to a modelled card, with PIO, SDMA and ADMA2 (32-bit) data paths. Every register is a 32-bit word here; narrow accesses pick their lane. The card's bus takes its time: a command is 48 clocks, its response 48 or 136 and 64 of gap at the card clock, a 512-byte block 1042 clocks on four wires, and the VPU waits for them. A card answers `ACMD41` busy until 196 ms after the first, which is the 229 to 287 polls the bootloader of a Raspberry Pi 4B d03115 makes.
 
 Sources:
 

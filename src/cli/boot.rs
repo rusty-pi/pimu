@@ -249,7 +249,7 @@ MEDIA AND NETWORK:
               Raspberry Pi USB flash drive does behind the VL805 of a
               Raspberry Pi 4B d03115 when nothing talks to it for about 13.4 s
               after a warm reset. `rpi-flash-drive` does it by default, with the
-              limit docs/usb.md calibrates (35.2 s of model time, not board
+              limit docs/usb.md calibrates (11.25 s of model time, not board
               time); `off` turns it off. The generic stick never does unless
               asked.
     --usb-mb <n>

@@ -39,26 +39,49 @@ use crate::bus::{BusResult, MmioDevice, Width};
 
 // `BUSY` is bit 7 of every `CM_*_CTL` register, not only `UARTCTL`'s.
 use crate::spec::cm::{
-    DELAY as CM_DELAY, GEN_1E8_CTL, GEN_210_CTL, LOCK as CM_LOCK, PLLB, PLLB_HOLDARM_MASK, UARTCTL,
-    UARTCTL_BUSY_MASK as CTL_BUSY, UARTCTL_ENAB_MASK as CTL_ENAB, UARTCTL_SRC_MASK as CTL_SRC,
-    UARTDIV,
+    DELAY as CM_DELAY, GEN_1E8_CTL, GEN_210_CTL, LOCK as CM_LOCK, PLLA_CORE, PLLA_CTRL,
+    PLLA_CTRL_NDIV_MASK, PLLA_CTRL_PDIV_MASK, PLLA_CTRL_PDIV_SHIFT, PLLA_CTRL_PWRDN_MASK,
+    PLLA_FRAC, PLLB, PLLB_HOLDARM_MASK, PLLC_CORE0, PLLC_CORE1, PLLC_CORE2,
+    PLLC_CORE2_DISABLE_MASK, PLLC_CORE2_DIV_MASK, PLLC_CTRL, PLLC_FRAC, PLLD_CORE, PLLD_CTRL,
+    PLLD_FRAC, UARTCTL, UARTCTL_BUSY_MASK as CTL_BUSY, UARTCTL_ENAB_MASK as CTL_ENAB,
+    UARTCTL_SRC_MASK as CTL_SRC, UARTDIV, VPUCTL, VPUDIV,
 };
 use crate::spec::Coverage;
 
 /// `LOCK`, `DELAY` and `PLLB` are modelled; `UARTCTL` / `UARTDIV` get the
-/// storage every `*_CTL` / `*_DIV` register does.
+/// storage every `*_CTL` / `*_DIV` register does; the VPU clock is worked out
+/// from `VPUCTL`, `VPUDIV` and the PLLs they can select.
 pub const COVERAGE: Coverage = Coverage {
     block: "cm",
-    decoded: &[UARTCTL, UARTDIV, CM_DELAY, CM_LOCK, PLLB],
+    decoded: &[
+        UARTCTL, UARTDIV, CM_DELAY, CM_LOCK, PLLB, VPUCTL, VPUDIV, PLLA_CTRL, PLLA_FRAC, PLLA_CORE,
+        PLLC_CTRL, PLLC_FRAC, PLLC_CORE0, PLLC_CORE1, PLLC_CORE2, PLLD_CTRL, PLLD_FRAC, PLLD_CORE,
+    ],
 };
 /// Password byte the firmware ORs into every clock-manager write.
 const PASSWD: u32 = 0x5A00_0000;
 
+/// The oscillator every PLL and the boot-time VPU clock run from.
+pub const OSCILLATOR_HZ: u64 = 54_000_000;
+
+/// Where the bootcode's copies of the PLL registers sit above the ones start4
+/// and Linux use. They are one set of registers to the PLL, so the VPU clock
+/// follows whichever was written last.
+const PLL_COPY_BASE: u32 = 0x1900;
+const PLL_COPY_OFFSET: u32 = 0x800;
+
+/// The first register of the A2W half, where the PLL words start.
+const A2W_BASE: u32 = 0x1100;
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ClockManager {
     storage: BTreeMap<u32, u32>,
+    /// The PLL words and channel dividers, under their `start4` offsets
+    /// whichever copy they were written through.
+    pll: BTreeMap<u32, u32>,
     uart_disturbed: bool,
     arm_held: bool,
+    vpu_changed: bool,
 }
 
 impl ClockManager {
@@ -90,6 +113,57 @@ impl ClockManager {
     /// an untouched register counts as live rather than as a stopped one.
     pub fn uart_clock_live(&self) -> bool {
         self.storage.get(&UARTCTL).is_none_or(|v| v & CTL_ENAB != 0)
+    }
+
+    fn pll_word(&self, off: u32) -> u32 {
+        self.pll.get(&off).copied().unwrap_or(0) & !PASSWD
+    }
+
+    /// A PLL channel's output in Hz: `ctrl` and `frac` are the multiplier's
+    /// words, `core` the channel taken from it. A PLL that is powered down, or
+    /// a channel that is off, gives 0.
+    fn pll_channel_hz(&self, ctrl: u32, frac: u32, core: u32) -> u64 {
+        let (ctrl, frac, core) = (
+            self.pll_word(ctrl),
+            self.pll_word(frac),
+            self.pll_word(core),
+        );
+        let ndiv = u64::from(ctrl & PLLA_CTRL_NDIV_MASK);
+        let pdiv = u64::from((ctrl & PLLA_CTRL_PDIV_MASK) >> PLLA_CTRL_PDIV_SHIFT).max(1);
+        let div = u64::from(core & PLLC_CORE2_DIV_MASK);
+        let off = core & PLLC_CORE2_DISABLE_MASK != 0;
+        if ctrl & PLLA_CTRL_PWRDN_MASK != 0 || off || div == 0 || ndiv == 0 {
+            return 0;
+        }
+        let multiplier_q20 = (ndiv << 20) + u64::from(frac & 0xF_FFFF);
+        (OSCILLATOR_HZ * multiplier_q20 / pdiv / div) >> 20
+    }
+
+    /// The clock the VPU runs from, as `VPUCTL` and `VPUDIV` and the PLL they
+    /// select set it, in Hz. A source the model does not follow, or a PLL that
+    /// is not running, leaves the VPU on the oscillator.
+    pub fn vpu_hz(&self) -> u64 {
+        let ctl = self.storage.get(&VPUCTL).copied().unwrap_or(0) & !PASSWD;
+        let div = u64::from(self.storage.get(&VPUDIV).copied().unwrap_or(0) & 0xFF_FFFF);
+        let pll = |ctrl, frac, core| self.pll_channel_hz(ctrl, frac, core) << 12;
+        let src = match ctl & 0xF {
+            1 => OSCILLATOR_HZ << 12,
+            4 => pll(PLLA_CTRL, PLLA_FRAC, PLLA_CORE),
+            5 => pll(PLLC_CTRL, PLLC_FRAC, PLLC_CORE0),
+            6 => pll(PLLD_CTRL, PLLD_FRAC, PLLD_CORE),
+            8 => pll(PLLC_CTRL, PLLC_FRAC, PLLC_CORE1),
+            9 => pll(PLLC_CTRL, PLLC_FRAC, PLLC_CORE2),
+            _ => 0,
+        };
+        match (src, div) {
+            (0, _) | (_, 0) => OSCILLATOR_HZ,
+            (src, div) => src / div,
+        }
+    }
+
+    /// Whether a write since the last call may have moved [`Self::vpu_hz`].
+    pub fn take_vpu_change(&mut self) -> bool {
+        core::mem::take(&mut self.vpu_changed)
     }
 
     /// Whether the UART clock has been stopped or retuned since the last call.
@@ -131,6 +205,15 @@ impl MmioDevice for ClockManager {
             self.arm_held = value & PLLB_HOLDARM_MASK != 0;
         }
         self.storage.insert(off, value);
+        let canonical = if off >= PLL_COPY_BASE {
+            off - PLL_COPY_OFFSET
+        } else {
+            off
+        };
+        if canonical >= A2W_BASE {
+            self.pll.insert(canonical, value);
+        }
+        self.vpu_changed |= matches!(off, VPUCTL | VPUDIV) || canonical >= A2W_BASE;
         Ok(())
     }
 }

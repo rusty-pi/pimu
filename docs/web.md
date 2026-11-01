@@ -143,7 +143,7 @@ its behaviour after a late first host contact ([`usb.md`](usb.md#the-raspberry-p
 
 The panel's last field is `--usb-wedge host-silent:<seconds>|off`. Empty, the
 Raspberry Pi Flash Drive refuses an address (Linux logs `device not accepting
-address`) when the USB controller first runs later than 35.2 s of the board's
+address`) when the USB controller first runs later than 11.25 s of the emulator's
 clock after a reset the guest asks for (a power-on never does it, so the first
 boot is fine), and the generic stick never does; a number replaces that limit,
 `off` turns it off. What it models, the 13.4 s measured on the board, why

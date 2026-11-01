@@ -48,6 +48,7 @@ pub mod snap;
 pub mod soc;
 pub mod spec;
 pub mod stdio;
+pub mod timing;
 pub mod vpu;
 pub mod web;
 pub mod xz;

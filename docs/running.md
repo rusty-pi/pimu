@@ -314,6 +314,61 @@ passes it, so CI is unpaced. Pacing changes nothing the guest sees — same
 instructions, same modelled time — and the time spent asleep does not count
 against `--max-wall`; `-v` reports it.
 
+## Modelled time
+
+The guest's clock is the system timer, and it counts what the model charges, not
+the host's time. A run repeats exactly, and `--speed` changes nothing the guest
+sees.
+
+**The VPU** is charged by the clock it runs at. That is worked out from what the
+firmware programs, not assumed: `VPUCTL`, `VPUDIV` and the multiplier and channel
+divider of the PLL they select (the `*R` copies the bootcode writes and the
+registers `start4.elf` writes are one set; the last write wins). The 54 MHz
+oscillator before the bootcode switches it, 500 MHz from PLLC then and from PLLA
+in `start4.elf`. At that clock an instruction takes half a cycle, and a taken
+branch, jump, call or return another ten. The constants, and the measurements
+they come from, are in [`src/timing.rs`](../src/timing.rs).
+
+**The waits the model would otherwise answer at once** are charged where the
+board spends them, so the firmware sees the time pass:
+
+- the boot ROM, before the bootcode's first line: 0.19 s and 6.2 µs a byte of
+  bootcode;
+- the LPDDR4 PHY's calibration handshakes: 54 ms each, 27 in a boot;
+- SPI0, a byte at a time: eight bit times at 500 MHz over `CLK.CDIV`;
+- the SD card's bus: a command is 48 clocks, its response and 64 of gap, a block
+  1042 clocks on four wires, all at the card clock; a card is busy for 196 ms after
+  its first `ACMD41`;
+- HDMI DDC and I²C transfers, USB link training and port resets, which were timed
+  before.
+
+**Calibrated against** a Raspberry Pi 4B d03115 booting the EEPROM release of
+2026-08-04 (`0a7ef05f`) and `start4.elf` of 2026-09-14 from an SD card, with
+`SIGNED_BOOT=1`. The board's own seconds-since-reset stamps in its serial log are
+the reference; a host's timestamps of that log run late by the backlog of a
+115200 baud console. Nothing reads a board at build or test time.
+
+| Span | Model | Board |
+|---|---|---|
+| Bootloader banner | 2.58 s | 2.67 to 2.72 s |
+| Hash and RSA check of a 16 MiB `boot.img`, from `Loading boot.img` | 2.6 s | 2.4 s |
+| The same for a 30 MiB `boot.img` | 4.9 s | 5.0 to 5.5 s |
+| `start4.elf`'s first log line to the ARM's release | 2.5 s | 2.7 s |
+| Reset to Linux's first xHCI access, `boot_delay=0` | 9.3 s | about 10 s |
+
+**Not calibrated:** the ARM, which retires one instruction a cycle at a nominal
+1.5 GHz whatever the DVFS and AVS models do (Linux's first second of boot lands
+within about 10% of the board's, `xhci_hcd` probing at 0.95 s against 0.89 to
+0.97 s), anything a Linux userspace waits on, USB devices' own timing beyond
+link training and resets, and Ethernet. Branchy code such as the
+kernel inflate and CRC in `start4.elf` runs faster in the model than on the
+board. One cost per byte cannot match both `boot.img` sizes better than about
+10%: the board takes 0.15 s a MiB for 16 MiB and 0.17 s for 30 MiB.
+
+Firmware loops that poll a timer and a device for a software timeout run for
+real, so they cost more instructions than they did when the VPU was modelled at
+54 MHz: a boot to the ARM's release retires about a third more of them.
+
 ## Running the ARM cores in parallel: `--parallel`
 
 By default every core is interpreted in turn on one host thread, which is what

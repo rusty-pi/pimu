@@ -22,18 +22,17 @@ fn compare_channel(offset: u32) -> Option<usize> {
     (rel % C_STRIDE == 0 && rel / C_STRIDE < C_COUNT).then_some((rel / C_STRIDE) as usize)
 }
 
-/// Nominal VPU clock in Hz, used only to convert executed cycles into
-/// microseconds. This is the crystal a Pi 4 runs the VPU from before the PLLs
-/// come up; the model keeps that rate for the whole run, since it does not
-/// follow the firmware's clock programming.
+/// The VPU clock in Hz at reset: the crystal a Pi 4 runs the VPU from until
+/// the firmware switches it to a PLL. [`SysTimer::set_vpu_hz`] follows that
+/// switch from there on.
 pub const VPU_HZ_DEFAULT: u64 = 54_000_000;
-
-const CYCLES_PER_US: u64 = VPU_HZ_DEFAULT / 1_000_000;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct SysTimer {
     micros: u64,
     frac_cycles: u64,
+    /// VPU cycles in a microsecond at the clock the VPU runs from now.
+    cycles_per_us: u64,
     cs: u32,
     cmp: [u32; 4],
     deadline: [Option<u64>; 4],
@@ -57,6 +56,7 @@ impl SysTimer {
         SysTimer {
             micros: 0,
             frac_cycles: 0,
+            cycles_per_us: VPU_HZ_DEFAULT / 1_000_000,
             cs: 0,
             cmp: [0; 4],
             deadline: [None; 4],
@@ -67,6 +67,22 @@ impl SysTimer {
             log: Log::default(),
             arms: 0,
         }
+    }
+
+    /// Run the VPU's cycles at `hz` from now on. The part of a microsecond
+    /// already elapsed stays the same part of it.
+    pub fn set_vpu_hz(&mut self, hz: u64) {
+        let per_us = (hz / 1_000_000).max(1);
+        self.frac_cycles = self.frac_cycles * per_us / self.cycles_per_us;
+        self.cycles_per_us = per_us;
+    }
+
+    pub fn cycles_per_us(&self) -> u64 {
+        self.cycles_per_us
+    }
+
+    pub fn vpu_hz(&self) -> u64 {
+        self.cycles_per_us * 1_000_000
     }
 
     pub fn channel_pending(&self, c: u8) -> bool {
@@ -117,7 +133,7 @@ impl SysTimer {
             return 0;
         }
         (us - self.micros)
-            .saturating_mul(CYCLES_PER_US)
+            .saturating_mul(self.cycles_per_us)
             .saturating_sub(self.frac_cycles)
     }
 
@@ -126,7 +142,7 @@ impl SysTimer {
     /// with the fast-forwards as well as with retired cycles.
     pub fn cycles_at(&self, hz: u64) -> u64 {
         let per_us = hz / 1_000_000;
-        self.micros * per_us + self.frac_cycles * per_us / CYCLES_PER_US
+        self.micros * per_us + self.frac_cycles * per_us / self.cycles_per_us
     }
 
     /// Advance by `cycles` VPU cycles, reporting whether the microsecond count
@@ -135,7 +151,7 @@ impl SysTimer {
     #[inline]
     pub fn advance(&mut self, cycles: u64) -> bool {
         let total = self.frac_cycles + cycles;
-        if total < CYCLES_PER_US {
+        if total < self.cycles_per_us {
             self.frac_cycles = total;
             return false;
         }
@@ -145,8 +161,8 @@ impl SysTimer {
 
     #[inline(never)]
     fn advance_us(&mut self, total: u64) {
-        self.micros += total / CYCLES_PER_US;
-        self.frac_cycles = total % CYCLES_PER_US;
+        self.micros += total / self.cycles_per_us;
+        self.frac_cycles = total % self.cycles_per_us;
         self.service_matches();
     }
 

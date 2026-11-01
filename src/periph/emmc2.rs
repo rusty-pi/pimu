@@ -307,6 +307,9 @@ pub struct Emmc2 {
     wbuf: Vec<u8>,
     dma: Option<Dma>,
     dma_pending: bool,
+    /// Microseconds the bytes moved by DMA since [`Emmc2::take_wire_us`] took
+    /// on the card's bus.
+    wire_us: u64,
     /// RAM ranges the last DMA run wrote, for translated-code invalidation.
     dma_written: Vec<(u32, u32)>,
     /// CMD11 accepted: the card holds CMD/DAT low until the clock comes back
@@ -338,6 +341,7 @@ impl Default for Emmc2 {
             wbuf: Vec::new(),
             dma: None,
             dma_pending: false,
+            wire_us: 0,
             dma_written: Vec::new(),
             switching_1v8: false,
             card_powered: true,
@@ -560,6 +564,7 @@ impl Emmc2 {
         if let Some(n) = self.next_block.as_mut() {
             n.polls_left -= 1;
             if n.polls_left == 0 {
+                self.wire_us += n.due_us.saturating_sub(self.now_us);
                 self.block_arrives();
             }
         }
@@ -608,6 +613,14 @@ impl Emmc2 {
         let multi = mode & TM_MULTI != 0;
         let auto_cmd = (mode >> TM_AUTO_CMD_SHIFT) & 3;
 
+        let response_bits = match resp_type {
+            1 => 136,
+            2 | 3 => 48,
+            _ => 0,
+        };
+        self.wire_us += (48 + response_bits + crate::timing::SD_COMMAND_GAP_CLOCKS) * 1_000_000
+            / self.card_clock_hz().max(1);
+
         // Any new command tears down a previous transfer's state (CMD12
         // included — ending an open-ended read is what it is for).
         self.reset_data();
@@ -622,7 +635,11 @@ impl Emmc2 {
         }
 
         let response = match self.card.as_mut().filter(|_| self.card_powered) {
-            Some(card) => card.command(index, arg),
+            Some(card) => {
+                let response = card.command(index, arg);
+                self.wire_us += card.take_wait_us();
+                response
+            }
             None => crate::periph::sdcard::SdResponse {
                 no_response: true,
                 ..Default::default()
@@ -776,11 +793,13 @@ impl Emmc2 {
         let Some(mut d) = self.dma.take() else {
             return;
         };
+        let pos_before = d.pos;
         let done = if d.adma {
             self.run_adma2(&mut d, ram)
         } else {
             self.run_sdma(&mut d, ram)
         };
+        self.charge_wire(d.pos - pos_before);
         match done {
             Some(true) => {
                 if d.write {
@@ -796,6 +815,19 @@ impl Emmc2 {
             Some(false) => self.dma = Some(d),
             None => {}
         }
+    }
+
+    /// A 512-byte block is 1042 clocks on a 4-bit bus (start, 1024 data,
+    /// 16 CRC, end) and four times that on one wire.
+    fn charge_wire(&mut self, bytes: usize) {
+        let wide = self.get(HOST_CONTROL) & HC_DATA_WIDTH != 0;
+        let clocks_per_block = if wide { 1042 } else { 4 * 1042 };
+        let hz = self.card_clock_hz().max(1);
+        self.wire_us += bytes as u64 * clocks_per_block * 1_000_000 / (512 * hz);
+    }
+
+    pub fn take_wire_us(&mut self) -> u64 {
+        std::mem::take(&mut self.wire_us)
     }
 
     fn dma_copy(&mut self, d: &mut Dma, ram: &mut Ram, addr: u32, n: usize) -> bool {
@@ -1245,6 +1277,8 @@ mod tests {
             cmd(e, 55, 0, R1, 0);
             cmd(e, 41, ocr, 0x02, 0);
             r = rd(e, RESPONSE0);
+            let now = e.now_us + crate::timing::SD_POWER_UP_US;
+            e.advance_to(now);
         }
         r
     }

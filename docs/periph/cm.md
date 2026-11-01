@@ -6,7 +6,7 @@
 - Base: `0x7E101000`
 - Size: `0x2000`
 
-The analogue PLLs are not modelled: every PLL reads locked, every `*_CTL` register reads `BUSY` clear, and everything else is stored with the password byte masked on read-back. The A2W half (from `0x1000`) holds each PLL's analogue words, control word, fraction and output channels. The BCM2711 bootcode programs PLLC and PLLD through a second copy of that half `0x800` higher (the `*R` registers); start4 reprograms PLLA, PLLC, PLLD and PLLB, and writes PLLH's analogue words, through the base copy.
+The analogue PLLs are not modelled: every PLL reads locked, every `*_CTL` register reads `BUSY` clear, and everything else is stored with the password byte masked on read-back. The A2W half (from `0x1000`) holds each PLL's analogue words, control word, fraction and output channels. The BCM2711 bootcode programs PLLC and PLLD through a second copy of that half `0x800` higher (the `*R` registers); start4 reprograms PLLA, PLLC, PLLD and PLLB, and writes PLLH's analogue words, through the base copy. The one thing the model works out from the PLL words is the VPU's clock: the multiplier and the channel divider that `VPUCTL` selects (the two copies are one set of words, the last written wins), over `VPUDIV`. The system timer counts the VPU's instructions at that rate (`src/timing.rs`), so the bootcode's `SRC` 5 off PLLC at 3000 MHz over 6 is 500 MHz from 7 ms after reset, and the oscillator's 54 MHz is what the VPU runs at before it and while start4 parks it there.
 
 Sources:
 
@@ -117,7 +117,7 @@ Sources:
 
 Offset `0x008` · access `rw` · 32 bits
 
-The VPU's own clock generator. start4 writes `0x71` early, and `SRC` 4 (PLLA's core channel) with `ENAB` and `GATE` once PLLA runs. `0x71` is the oscillator: start4 moves the VPU there (`(value & ~0xF) | 1`, divider 1) before it switches PLLC off, parks it there again around PLLA's reprogramming and writes its saved words back once PLLA has locked. The move to `SRC` 4 goes the way its generator code moves a running clock that keeps its source: divider first, no stop, the control word written twice. It sets the same words again the same way once PLLB (the ARM's PLL) has started, just before the ARM does.
+The VPU's own clock generator. start4 writes `0x71` early, and `SRC` 4 (PLLA's core channel) with `ENAB` and `GATE` once PLLA runs. `0x71` is the oscillator: start4 moves the VPU there (`(value & ~0xF) | 1`, divider 1) before it switches PLLC off, parks it there again around PLLA's reprogramming and writes its saved words back once PLLA has locked. The move to `SRC` 4 goes the way its generator code moves a running clock that keeps its source: divider first, no stop, the control word written twice. It sets the same words again the same way once PLLB (the ARM's PLL) has started, just before the ARM does. The bootcode writes `0x75` (`SRC` 5, PLLC's channel 0) at 7 ms after reset, 500 MHz at `PLLC_CORE0R` 6, and the model runs the VPU at the clock these words give.
 
 Sources:
 

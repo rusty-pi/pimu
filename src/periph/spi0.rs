@@ -104,6 +104,9 @@ pub enum ChipSelect {
 pub struct Spi0 {
     cs: u32,
     clk: u32,
+    /// Core clock cycles the master has spent shifting bits since
+    /// [`Self::take_shift_clocks`] was last asked.
+    shift_clocks: u64,
     dlen: u32,
     ltoh: u32,
     dc: u32,
@@ -393,6 +396,22 @@ impl Spi0 {
     }
 }
 
+impl Spi0 {
+    /// The core clock cycles the bytes written since the last call took to
+    /// shift: `SCLK` is the core clock over `CLK.CDIV`, 65536 for a `CDIV` of 0.
+    pub fn take_shift_clocks(&mut self) -> u64 {
+        std::mem::take(&mut self.shift_clocks)
+    }
+
+    fn charge(&mut self, bits: u64) {
+        let cdiv = match self.clk & 0xFFFF {
+            0 => 65536,
+            n => u64::from(n),
+        };
+        self.shift_clocks += bits * cdiv;
+    }
+}
+
 impl MmioDevice for Spi0 {
     fn name(&self) -> &'static str {
         "spi0"
@@ -433,8 +452,14 @@ impl MmioDevice for Spi0 {
                 }
                 self.settle();
             }
-            FIFO if self.cs & CS_DMAEN != 0 => self.shift_word(value),
-            FIFO => self.shift(value as u8),
+            FIFO if self.cs & CS_DMAEN != 0 => {
+                self.charge(32);
+                self.shift_word(value)
+            }
+            FIFO => {
+                self.charge(8);
+                self.shift(value as u8)
+            }
             CLK => self.clk = value,
             DLEN => self.dlen = value,
             LTOH => self.ltoh = value,

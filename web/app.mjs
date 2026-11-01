@@ -1135,7 +1135,7 @@ const PANELS = {
         h("div", { class: "field" }, h("span", { class: "label" }, "Stick model"),
           ...STICK_MODELS.map(([model, label, help]) => radio("usb-model", model, state.usb.model === model, label, help, () => { state.usb.model = model; changed(); renderDrawer(); }))),
         h("div", { class: "field" }, h("label", {}, "Takes no address if the host is silent for (seconds, or off)"), h("input", { type: "text", inputmode: "decimal", placeholder: state.usb.model === "generic" ? "off" : "the model's own", value: state.usb.hostSilent, oninput: (e) => { state.usb.hostSilent = e.target.value; changed(); } }),
-          h("p", { class: "help" }, "The stick refuses an address when the USB controller first runs later than that many seconds after power-on, as a Raspberry Pi flash drive does on a Raspberry Pi 4B when nothing talks to it for about 13.4 s after a warm reset. Empty: the Raspberry Pi Flash Drive does it after 35.2 s of the emulator's clock (slower than the board's), the generic stick never. A number replaces that, off turns it off. A wedge is a model of an observed behaviour whose cause is not known; see docs/usb.md.")),
+          h("p", { class: "help" }, "The stick refuses an address when the USB controller first runs later than that many seconds after power-on, as a Raspberry Pi flash drive does on a Raspberry Pi 4B when nothing talks to it for about 13.4 s after a warm reset. Empty: the Raspberry Pi Flash Drive does it after 11.25 s of the emulator's clock (a little earlier than the board's), the generic stick never. A number replaces that, off turns it off. A wedge is a model of an observed behaviour whose cause is not known; see docs/usb.md.")),
       ] : null);
   },
 
