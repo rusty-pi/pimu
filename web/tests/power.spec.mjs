@@ -52,6 +52,7 @@ test.describe("powering on", () => {
     await app.drawer.getByRole("radio", { name: /A USB stick/ }).check();
     await app.drawer.locator("input[type=file]").setInputFiles(data("disk.img"));
     await app.field("Stick size").locator("input").fill("300");
+    await app.field("Takes no address").locator("input").fill("37.8");
 
     await app.open("usbc");
     await app.drawer.getByRole("radio", { name: "A USB stick" }).check();
@@ -97,6 +98,7 @@ test.describe("powering on", () => {
       display: true,
       network: true,
       usbMb: 300,
+      usbHostSilent: 37.8,
       otgDock: true,
       jitter: 7,
       faults: 1000,

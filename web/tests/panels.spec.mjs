@@ -227,7 +227,8 @@ test.describe("USB", () => {
     await app.drawer.getByLabel("a disk image URL").fill("https://example.org/stick.img");
     await expect(app.page.locator('[data-sub="usb"]')).toHaveText("stick.img");
     await app.field("Stick size").locator("input").fill("300");
-    expect((await app.localState()).usb).toMatchObject({ kind: "url", url: "https://example.org/stick.img", mb: "300" });
+    await app.field("Takes no address").locator("input").fill("37.8");
+    expect((await app.localState()).usb).toMatchObject({ kind: "url", url: "https://example.org/stick.img", mb: "300", hostSilent: "37.8" });
     await app.drawer.getByRole("radio", { name: "Nothing plugged in" }).check();
     await expect(app.part("usb")).toHaveAttribute("data-filled", "false");
     await expect(app.page.locator('[data-sub="usb"]')).toHaveText("empty");

@@ -51,7 +51,7 @@ const DEFAULT_STATE = {
   extraBootconf: "",
   skipSignedBoot: false,
   tryboot: false,
-  usb: { kind: "none", url: "", mb: "" },
+  usb: { kind: "none", url: "", mb: "", hostSilent: "" },
   otg: { kind: "none", url: "", dock: false },
   net: {
     plugged: false,
@@ -386,6 +386,7 @@ async function buildRequest() {
   if (s.usb.kind !== "none") {
     request.images.usb = imageDescriptor(s.usb, files.usb, "USB stick");
     if (s.usb.mb) options.usbMb = Number(s.usb.mb);
+    if (s.usb.hostSilent.trim()) options.usbHostSilent = Number(s.usb.hostSilent);
   }
   if (s.otg.kind !== "none") {
     request.images.otg = imageDescriptor(s.otg, files.otg, "USB-C stick");
@@ -1126,6 +1127,8 @@ const PANELS = {
         imagePicker("usb", state.usb, "a disk image"),
         h("div", { class: "field" }, h("label", {}, "Stick size (MiB, optional)"), h("input", { type: "number", min: 1, value: state.usb.mb, oninput: (e) => { state.usb.mb = e.target.value; changed(); } }),
           h("p", { class: "help" }, "Bigger than the image: the rest reads as zeros, as on a stick the image was written to the start of.")),
+        h("div", { class: "field" }, h("label", {}, "Takes no address if the host is silent for (seconds, optional)"), h("input", { type: "number", min: 0, step: "any", value: state.usb.hostSilent, oninput: (e) => { state.usb.hostSilent = e.target.value; changed(); } }),
+          h("p", { class: "help" }, "Left empty, the stick always works. With a number, the stick refuses an address when the USB controller first runs later than that after power-on, as a Raspberry Pi flash drive does on a Raspberry Pi 4B when nothing talks to it for about 13.4 s after a warm reset. The time is the emulator's, which is slower than the board's: see docs/usb.md.")),
       ] : null);
   },
 
@@ -1363,6 +1366,7 @@ const CHANGE_FIELDS = [
   ["usb.kind", "usb", "Stick", (v) => IMAGE_FROM[v]],
   ["usb.url", "usb", "Stick URL", notSet, (s) => s.usb.kind === "url"],
   ["usb.mb", "usb", "Stick size (MiB)", notSet, (s) => s.usb.kind !== "none"],
+  ["usb.hostSilent", "usb", "Stick takes no address if the host is silent for (s)", notSet, (s) => s.usb.kind !== "none"],
   ["otg.kind", "usbc", "Stick on the OTG port", (v) => IMAGE_FROM[v]],
   ["otg.url", "usbc", "Stick URL", notSet, (s) => s.otg.kind === "url"],
   ["otg.dock", "usbc", "Behind a USB-C dock", onOff, (s) => s.otg.kind !== "none"],

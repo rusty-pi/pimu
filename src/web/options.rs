@@ -37,6 +37,10 @@ pub struct Options {
     pub display: bool,
     pub otg_dock: bool,
     pub usb_mb: Option<u64>,
+    /// Seconds after the reset of the SoC past which the first run of the
+    /// xHCI controller leaves the USB stick taking no address
+    /// (`--usb-wedge host-silent:<seconds>`).
+    pub usb_host_silent: Option<f64>,
     /// The Ethernet cable goes into the built-in network peer.
     pub network: bool,
     /// Nothing in the microSD slot: a board that boots over the network, or
@@ -127,6 +131,13 @@ mod tests {
         let d03115 = board(r#"{"boardRev":"d03115"}"#).unwrap();
         assert_eq!(d03115.memory_bytes(), 8 << 30);
         assert_eq!(d03115.mismatch(), None);
+    }
+
+    #[test]
+    fn the_stick_may_be_told_to_wedge_after_a_silent_host() {
+        let o = Options::parse(r#"{"usbHostSilent":37.8}"#).unwrap();
+        assert_eq!(o.usb_host_silent, Some(37.8));
+        assert_eq!(Options::parse("").unwrap().usb_host_silent, None);
     }
 
     #[test]

@@ -165,6 +165,13 @@ impl Rig {
                 USB_ROOT_PORT,
                 Box::new(crate::periph::usb::MassStorage::with_disk(disk.clone())),
             );
+            if let Some(seconds) = options.usb_host_silent {
+                machine
+                    .pcie
+                    .endpoint
+                    .xhci
+                    .set_host_silent_limit((seconds * 1e6) as u64);
+            }
         }
         if let Some(disk) = &self.otg {
             let stick = crate::periph::usb::MassStorage::with_disk_hs(disk.clone());
