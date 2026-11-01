@@ -122,6 +122,15 @@ descriptor advertises and the controller model never uses; and bus power.
 `--usb-uas` does not apply to it, since it is a UAS stick; `--usb-uas-refuse`
 does.
 
+UAS behaviour that Linux's `uas` driver needs, for this model and for
+`--usb-uas`: a read whose data-in transfer was queued before the command gets no
+Read Ready (Linux logs `unexpected read rdy` and the command never ends); one
+whose transfer is queued later does, for a host that waits for it. `INQUIRY`,
+`MODE SENSE(6)` and `REQUEST SENSE` answers are cut to the CDB's allocation
+length, and an `INQUIRY` of a logical unit other than 0 reports no device. Not
+checked against the real stick; a write still gets Write Ready when its data is
+queued with the command.
+
 The preset also wedges, by default: see below.
 
 ## A stick that wedges
