@@ -4,11 +4,20 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 
+use crate::periph::usb::{HostSilent, StickModel};
 use crate::soc::{Board, Stepping};
 
 /// The biggest Raspberry Pi 4. A board takes only as much of the tab's memory
 /// as its guest has written to, so a size is no promise that it fits.
 const MAX_MEMORY: u64 = 8 << 30;
+
+/// A number of seconds, or the word `off`.
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum HostSilentSetting {
+    Seconds(f64),
+    Word(String),
+}
 
 #[derive(Deserialize, Default, Debug)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -37,10 +46,14 @@ pub struct Options {
     pub display: bool,
     pub otg_dock: bool,
     pub usb_mb: Option<u64>,
+    /// The USB stick: `generic` (the default) or `rpi-flash-drive`
+    /// (`--usb-model`).
+    pub usb_model: Option<String>,
     /// Seconds after the reset of the SoC past which the first run of the
-    /// xHCI controller leaves the USB stick taking no address
-    /// (`--usb-wedge host-silent:<seconds>`).
-    pub usb_host_silent: Option<f64>,
+    /// xHCI controller leaves the USB stick taking no address, or `"off"`
+    /// (`--usb-wedge host-silent:<seconds>|off`); the stick model's own limit
+    /// when left out.
+    pub usb_host_silent: Option<HostSilentSetting>,
     /// The Ethernet cable goes into the built-in network peer.
     pub network: bool,
     /// Nothing in the microSD slot: a board that boots over the network, or
@@ -59,6 +72,31 @@ pub struct Options {
 }
 
 impl Options {
+    pub fn stick_model(&self) -> Result<StickModel> {
+        match self.usb_model.as_deref() {
+            None => Ok(StickModel::default()),
+            Some(name) => StickModel::parse(name).ok_or_else(|| {
+                anyhow::anyhow!("USB stick {name:?}: expected generic or rpi-flash-drive")
+            }),
+        }
+    }
+
+    /// The limit the stick wedges at, in model microseconds, if it does.
+    pub fn host_silent_limit_us(&self) -> Result<Option<u64>> {
+        let setting = match &self.usb_host_silent {
+            None => HostSilent::Model,
+            Some(HostSilentSetting::Word(w)) if w == "off" => HostSilent::Off,
+            Some(HostSilentSetting::Word(w)) => {
+                bail!("host-silent {w:?}: expected a number of seconds or off")
+            }
+            Some(HostSilentSetting::Seconds(s)) if s.is_finite() && *s >= 0.0 => {
+                HostSilent::AfterUs((s * 1e6) as u64)
+            }
+            Some(HostSilentSetting::Seconds(s)) => bail!("host-silent {s}: not a time"),
+        };
+        Ok(setting.limit_us(self.stick_model()?))
+    }
+
     pub fn parse(json: &str) -> Result<Options> {
         if json.trim().is_empty() {
             return Ok(Options::default());
@@ -135,9 +173,46 @@ mod tests {
 
     #[test]
     fn the_stick_may_be_told_to_wedge_after_a_silent_host() {
-        let o = Options::parse(r#"{"usbHostSilent":37.8}"#).unwrap();
-        assert_eq!(o.usb_host_silent, Some(37.8));
-        assert_eq!(Options::parse("").unwrap().usb_host_silent, None);
+        let limit = |json: &str| {
+            Options::parse(json)
+                .unwrap()
+                .host_silent_limit_us()
+                .unwrap()
+        };
+        assert_eq!(limit(r#"{"usbHostSilent":37.8}"#), Some(37_800_000));
+        assert_eq!(limit(""), None, "the generic stick never wedges");
+        assert_eq!(limit(r#"{"usbHostSilent":"off"}"#), None);
+        assert!(Options::parse(r#"{"usbHostSilent":"soon"}"#)
+            .unwrap()
+            .host_silent_limit_us()
+            .is_err());
+    }
+
+    #[test]
+    fn the_raspberry_pi_flash_drive_wedges_unless_told_not_to() {
+        let limit = |json: &str| {
+            Options::parse(json)
+                .unwrap()
+                .host_silent_limit_us()
+                .unwrap()
+        };
+        let model = r#""usbModel":"rpi-flash-drive""#;
+        assert_eq!(
+            limit(&format!("{{{model}}}")),
+            Some(crate::periph::usb::RPI_FLASH_DRIVE_HOST_SILENT_US)
+        );
+        assert_eq!(
+            limit(&format!(r#"{{{model},"usbHostSilent":"off"}}"#)),
+            None
+        );
+        assert_eq!(
+            limit(&format!(r#"{{{model},"usbHostSilent":12}}"#)),
+            Some(12_000_000)
+        );
+        assert!(Options::parse(r#"{"usbModel":"floppy"}"#)
+            .unwrap()
+            .stick_model()
+            .is_err());
     }
 
     #[test]

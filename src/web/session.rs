@@ -21,6 +21,7 @@ use crate::firmware::bootrom::BootRom;
 use crate::log::{Log, Spec};
 use crate::machine::Machine;
 use crate::periph::disk::Disk;
+use crate::periph::usb::StickModel;
 use crate::soc::Board;
 use crate::stdio::{HostEvent, HostInput};
 use crate::vpu::UnimplPolicy;
@@ -157,16 +158,17 @@ impl Rig {
                 .attach_eeprom(crate::periph::hat::HatEeprom::new(hat.clone()));
         }
         if let Some(disk) = &self.usb {
-            machine.pcie.endpoint.attach(
-                USB_ROOT_PORT,
-                Box::new(crate::periph::usb::MassStorage::with_disk(disk.clone())),
-            );
-            if let Some(seconds) = options.usb_host_silent {
-                machine
-                    .pcie
-                    .endpoint
-                    .xhci
-                    .set_host_silent_limit((seconds * 1e6) as u64);
+            let stick: Box<dyn crate::periph::usb::UsbDevice> = match options.stick_model()? {
+                StickModel::Generic => {
+                    Box::new(crate::periph::usb::MassStorage::with_disk(disk.clone()))
+                }
+                StickModel::RpiFlashDrive => Box::new(
+                    crate::periph::usb::UasStorage::rpi_flash_drive(disk.clone()),
+                ),
+            };
+            machine.pcie.endpoint.attach(USB_ROOT_PORT, stick);
+            if let Some(limit_us) = options.host_silent_limit_us()? {
+                machine.pcie.endpoint.xhci.set_host_silent_limit(limit_us);
             }
         }
         if let Some(disk) = &self.otg {

@@ -51,7 +51,7 @@ const DEFAULT_STATE = {
   extraBootconf: "",
   skipSignedBoot: false,
   tryboot: false,
-  usb: { kind: "none", url: "", mb: "", hostSilent: "" },
+  usb: { kind: "none", url: "", mb: "", model: "generic", hostSilent: "" },
   otg: { kind: "none", url: "", dock: false },
   net: {
     plugged: false,
@@ -386,7 +386,12 @@ async function buildRequest() {
   if (s.usb.kind !== "none") {
     request.images.usb = imageDescriptor(s.usb, files.usb, "USB stick");
     if (s.usb.mb) options.usbMb = Number(s.usb.mb);
-    if (s.usb.hostSilent.trim()) options.usbHostSilent = Number(s.usb.hostSilent);
+    if (s.usb.model !== "generic") options.usbModel = s.usb.model;
+    const hostSilent = s.usb.hostSilent.trim();
+    if (hostSilent) {
+      options.usbHostSilent = hostSilent.toLowerCase() === "off" ? "off" : Number(hostSilent);
+      if (Number.isNaN(options.usbHostSilent)) throw new Error("USB stick: the time the host may be silent is a number of seconds, or off");
+    }
   }
   if (s.otg.kind !== "none") {
     request.images.otg = imageDescriptor(s.otg, files.otg, "USB-C stick");
@@ -1127,8 +1132,10 @@ const PANELS = {
         imagePicker("usb", state.usb, "a disk image"),
         h("div", { class: "field" }, h("label", {}, "Stick size (MiB, optional)"), h("input", { type: "number", min: 1, value: state.usb.mb, oninput: (e) => { state.usb.mb = e.target.value; changed(); } }),
           h("p", { class: "help" }, "Bigger than the image: the rest reads as zeros, as on a stick the image was written to the start of.")),
-        h("div", { class: "field" }, h("label", {}, "Takes no address if the host is silent for (seconds, optional)"), h("input", { type: "number", min: 0, step: "any", value: state.usb.hostSilent, oninput: (e) => { state.usb.hostSilent = e.target.value; changed(); } }),
-          h("p", { class: "help" }, "Left empty, the stick always works. With a number, the stick refuses an address when the USB controller first runs later than that after power-on, as a Raspberry Pi flash drive does on a Raspberry Pi 4B when nothing talks to it for about 13.4 s after a warm reset. The time is the emulator's, which is slower than the board's: see docs/usb.md.")),
+        h("div", { class: "field" }, h("span", { class: "label" }, "Stick model"),
+          ...STICK_MODELS.map(([model, label, help]) => radio("usb-model", model, state.usb.model === model, label, help, () => { state.usb.model = model; changed(); renderDrawer(); }))),
+        h("div", { class: "field" }, h("label", {}, "Takes no address if the host is silent for (seconds, or off)"), h("input", { type: "text", inputmode: "decimal", placeholder: state.usb.model === "generic" ? "off" : "the model's own", value: state.usb.hostSilent, oninput: (e) => { state.usb.hostSilent = e.target.value; changed(); } }),
+          h("p", { class: "help" }, "The stick refuses an address when the USB controller first runs later than that many seconds after power-on, as a Raspberry Pi flash drive does on a Raspberry Pi 4B when nothing talks to it for about 13.4 s after a warm reset. Empty: the Raspberry Pi Flash Drive does it after 35.2 s of the emulator's clock (slower than the board's), the generic stick never. A number replaces that, off turns it off. A wedge is a model of an observed behaviour whose cause is not known; see docs/usb.md.")),
       ] : null);
   },
 
@@ -1329,6 +1336,10 @@ function settingRow(setting, image, edits) {
 
 const PART_NAMES = { sd: "microSD", eeprom: "EEPROM", usb: "USB 3.0", usbc: "USB-C", eth: "Ethernet", hdmi: "HDMI 0", gpio: "GPIO", soc: "BCM2711", log: "Log" };
 const CARD_CONTENTS = { official: "official firmware", github: "a GitHub directory", files: "files from my computer", image: "a disk image", none: "no card" };
+const STICK_MODELS = [
+  ["generic", "Generic Bulk-Only stick", "A Samsung Flash Drive FIT, measured on a Raspberry Pi 4B."],
+  ["rpi-flash-drive", "Raspberry Pi Flash Drive", "The official USB flash drive (2e8a:0030), UAS, with the descriptors of a real one. It wedges after a late first host contact, as the real one does: see below."],
+];
 const IMAGE_FROM = { file: "a local file", url: "a URL", none: "nothing" };
 const EEPROM_FROM = { official: "official image", url: "a URL", file: "a file" };
 
@@ -1366,6 +1377,7 @@ const CHANGE_FIELDS = [
   ["usb.kind", "usb", "Stick", (v) => IMAGE_FROM[v]],
   ["usb.url", "usb", "Stick URL", notSet, (s) => s.usb.kind === "url"],
   ["usb.mb", "usb", "Stick size (MiB)", notSet, (s) => s.usb.kind !== "none"],
+  ["usb.model", "usb", "Stick model", (v) => Object.fromEntries(STICK_MODELS.map(([m, label]) => [m, label]))[v] ?? v, (s) => s.usb.kind !== "none"],
   ["usb.hostSilent", "usb", "Stick takes no address if the host is silent for (s)", notSet, (s) => s.usb.kind !== "none"],
   ["otg.kind", "usbc", "Stick on the OTG port", (v) => IMAGE_FROM[v]],
   ["otg.url", "usbc", "Stick URL", notSet, (s) => s.otg.kind === "url"],
@@ -1523,6 +1535,7 @@ const SHARED_CHOICES = {
   "sd.image.kind": ["file", "url"],
   "eeprom.kind": Object.keys(EEPROM_FROM),
   "usb.kind": Object.keys(IMAGE_FROM),
+  "usb.model": STICK_MODELS.map(([model]) => model),
   "otg.kind": Object.keys(IMAGE_FROM),
   "net.tftp.mode": BOOT_FILE_SOURCES.map(([mode]) => mode),
   "net.http.mode": BOOT_FILE_SOURCES.map(([mode]) => mode),

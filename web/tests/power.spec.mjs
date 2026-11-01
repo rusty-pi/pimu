@@ -53,6 +53,7 @@ test.describe("powering on", () => {
     await app.drawer.locator("input[type=file]").setInputFiles(data("disk.img"));
     await app.field("Stick size").locator("input").fill("300");
     await app.field("Takes no address").locator("input").fill("37.8");
+    await app.drawer.getByRole("radio", { name: "Raspberry Pi Flash Drive" }).check();
 
     await app.open("usbc");
     await app.drawer.getByRole("radio", { name: "A USB stick" }).check();
@@ -98,6 +99,7 @@ test.describe("powering on", () => {
       display: true,
       network: true,
       usbMb: 300,
+      usbModel: "rpi-flash-drive",
       usbHostSilent: 37.8,
       otgDock: true,
       jitter: 7,
@@ -124,6 +126,38 @@ test.describe("powering on", () => {
     expect(request.hat).toEqual({ __file: "hat.eep", size: 256 });
     expect(request.edid).toEqual({ __file: "edid.bin", size: 128 });
     expect(request.net).toEqual({ tftp: { kind: "files", files: [{ path: "start4.elf", file: { __file: "start4.elf", size: 3 } }] } });
+  });
+
+  const plugStick = async (app) => {
+    await app.open("usb");
+    await app.drawer.getByRole("radio", { name: /A USB stick/ }).check();
+    await app.drawer.getByRole("radio", { name: "URL" }).check();
+    await app.drawer.getByLabel("a disk image URL").fill("https://example.org/stick.img");
+  };
+
+  test("the generic stick and its default wedge add nothing to the request", async ({ app }) => {
+    await plugStick(app);
+    await app.powerOn();
+    const { options } = await app.request();
+    expect(options).not.toHaveProperty("usbModel");
+    expect(options).not.toHaveProperty("usbHostSilent");
+  });
+
+  test("the Raspberry Pi Flash Drive asks for its model, and for off when the wedge is off", async ({ app }) => {
+    await plugStick(app);
+    await app.drawer.getByRole("radio", { name: "Raspberry Pi Flash Drive" }).check();
+    await app.field("Takes no address").locator("input").fill(" Off ");
+    await app.powerOn();
+    const { options } = await app.request();
+    expect(options.usbModel).toBe("rpi-flash-drive");
+    expect(options.usbHostSilent).toBe("off");
+  });
+
+  test("a wedge time that is neither a number nor off is refused", async ({ app }) => {
+    await plugStick(app);
+    await app.field("Takes no address").locator("input").fill("soon");
+    await app.powerButton.click();
+    await expect(app.page.locator("#toast")).toContainText("a number of seconds, or off");
   });
 
   test("a card that is an image asks for the image and no config.txt", async ({ app }) => {

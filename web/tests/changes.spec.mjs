@@ -203,6 +203,25 @@ test.describe("sharing", () => {
     expect([saved.board, saved.log, saved.bootOrder]).toEqual([{ stepping: "c0", memoryMb: 1024, boardRev: "" }, ["io"], null]);
   });
 
+  const packLink = (app, shared) => app.page.evaluate(async (json) => {
+    const packed = await new Response(new Blob([new TextEncoder().encode(json)]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer();
+    return `#board=${btoa(String.fromCharCode(...new Uint8Array(packed))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+  }, JSON.stringify(shared));
+
+  test("a link carries the stick model; one from before the model existed keeps the generic stick", async ({ app }) => {
+    const stick = { kind: "url", url: "https://example.org/stick.img", hostSilent: "35.2" };
+    await visit(app, `/${await packLink(app, { usb: { ...stick, model: "rpi-flash-drive" } })}`);
+    await expect(app.page.locator("#toast")).toHaveText("Opened the board from the link.");
+    expect((await app.localState()).usb).toMatchObject({ model: "rpi-flash-drive", hostSilent: "35.2" });
+    await expect(changes(app)).toContainText(["USB 3.0Stick modelresetGeneric Bulk-Only stick → Raspberry Pi Flash Drive"]);
+
+    await visit(app, `/${await packLink(app, { usb: stick })}`);
+    expect((await app.localState()).usb).toMatchObject({ model: "generic", hostSilent: "35.2" });
+
+    await visit(app, `/${await packLink(app, { usb: { ...stick, model: "floppy" } })}`);
+    expect((await app.localState()).usb.model).toBe("generic");
+  });
+
   test("a link opens nothing while the board is powered", async ({ app }) => {
     await app.running();
     await app.page.evaluate(() => (location.hash = "board=x"));

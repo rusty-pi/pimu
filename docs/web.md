@@ -35,7 +35,7 @@ The board is a block diagram in the style of [`board-sheet.svg`](board-sheet.svg
 | Power | The switch that powers the board on and off. |
 | microSD | The official firmware files from GitHub, the files of any GitHub directory, a folder from your computer, a disk image (local file or URL), or no card at all. `config.txt` lines and the kernel command line. |
 | EEPROM | The bootloader image (official, a URL, a file), the boot order as a list of steps, every bootloader setting as a form with drop-downs where the value is one of a few, signed-boot options. |
-| USB 3.0 | A stick: a disk image, local or by URL, its size, and optionally the time after which a silent host leaves it taking no address ([`usb.md`](usb.md#a-stick-that-wedges)). |
+| USB 3.0 | A stick: a disk image, local or by URL, its size, which stick it is (a generic Bulk-Only one, or the official Raspberry Pi Flash Drive), and optionally the time after which a silent host leaves it taking no address ([`usb.md`](usb.md#a-stick-that-wedges)). |
 | USB-C | The power, and a stick on the OTG port, optionally behind a dock. |
 | Ethernet | The built-in network peer (DHCP, DNS, TFTP, HTTP) as a boot server over TFTP, HTTP or both, each with its own files, and a Wake-on-LAN packet. |
 | HDMI 0 | A monitor, with its EDID. |
@@ -136,13 +136,21 @@ applied to the served files as well.
 
 ## A stick that stops answering
 
-The USB 3.0 panel's last field is `--usb-wedge host-silent:<seconds>`: with a
-number in it, the stick refuses an address (Linux logs `device not accepting
-address`) when the USB controller first runs later than that many seconds of the
-board's clock after a reset that the guest asks for (a power-on never does it,
-so the first boot is fine). What it models, the 13.4 s measured on the board
-and why the number has to be calibrated for the emulator are in
-[`usb.md`](usb.md#a-stick-that-wedges). The field is part of **Share as a link**.
+The USB 3.0 panel's **Stick model** is the generic Samsung Bulk-Only stick (the
+default) or the official **Raspberry Pi Flash Drive**, `--usb-model
+rpi-flash-drive` of the command line: the descriptors of a real one, UAS, and
+its behaviour after a late first host contact ([`usb.md`](usb.md#the-raspberry-pi-usb-flash-drive)).
+
+The panel's last field is `--usb-wedge host-silent:<seconds>|off`. Empty, the
+Raspberry Pi Flash Drive refuses an address (Linux logs `device not accepting
+address`) when the USB controller first runs later than 35.2 s of the board's
+clock after a reset the guest asks for (a power-on never does it, so the first
+boot is fine), and the generic stick never does; a number replaces that limit,
+`off` turns it off. What it models, the 13.4 s measured on the board, why
+the emulator's limit is larger, and that the wedge is a model of an observed
+behaviour whose cause is not known, are in [`usb.md`](usb.md#a-stick-that-wedges).
+Both are part of **Share as a link**; a link from before the stick model existed
+opens with the generic stick.
 
 ## Disk images are never loaded whole
 
