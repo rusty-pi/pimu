@@ -827,6 +827,7 @@ impl MassStorage {
         let cdb = cbw[15..15 + cdb_len.min(16)].to_vec();
         if dir_in || len == 0 {
             let (mut data, status) = self.scsi(&cdb, len);
+            absent_unit_inquiry(cbw[13] & 0x0F, &cdb, &mut data);
             data.truncate(len);
             let residue = (len - data.len()) as u32;
             self.phase = if data.is_empty() {
@@ -1103,6 +1104,16 @@ pub struct UasStorage {
     data_in_queued: HashSet<u32>,
 }
 
+/// The stick has one logical unit: `INQUIRY` of another reports that no device
+/// is there (peripheral qualifier 3), which ends a sequential LUN scan.
+fn absent_unit_inquiry(lun: u8, cdb: &[u8], data: &mut [u8]) {
+    if lun != 0 && cdb.first() == Some(&0x12) {
+        if let Some(first) = data.first_mut() {
+            *first = 0x7F;
+        }
+    }
+}
+
 /// How many bytes of the answer the CDB asks for, for the commands whose answer
 /// is longer than what a host may want. UAS has no transfer length of its own
 /// for the device to cut the answer to.
@@ -1311,6 +1322,7 @@ impl UasStorage {
             return Xfer::Ok(Vec::new());
         }
         let (mut data, status) = self.bot.scsi(cdb, 0);
+        absent_unit_inquiry(iu[9], cdb, &mut data);
         if let Some(alloc) = allocation_length(cdb) {
             data.truncate(alloc);
         }
@@ -1941,6 +1953,19 @@ mod tests {
         assert_eq!(data, vec![0x11; BLOCK_SIZE]);
         let sense = status_iu(&mut dev, 7);
         assert_eq!(sense[0], IU_SENSE);
+    }
+
+    #[test]
+    fn an_inquiry_of_another_logical_unit_reports_no_device() {
+        let mut dev = uas_stick();
+        assert!(matches!(dev.data_in_stream(3, 5, 36), Xfer::Nak));
+        let mut command = uas_command(5, &[0x12, 0, 0, 0, 36, 0]);
+        command[9] = 1;
+        dev.data_out_stream(1, 0, &command);
+        let Xfer::Ok(data) = dev.data_in_stream(3, 5, 36) else {
+            panic!("no data")
+        };
+        assert_eq!(data[0], 0x7F);
     }
 
     #[test]
