@@ -171,11 +171,15 @@ The packet goes out once in the whole run, not once per boot. A reset rebuilds
 the machine and looks for `--until` and `--send-after` again, but not for this, so
 the boot after a wake sees no second packet.
 
-A reset rebuilds the machine and carries over what a real board keeps: the
-flash as the self-update wrote it, the fuses, the pins of the GPIO expander, the
-DRAM and the card or e-MMC with what the guest wrote to it. The USB sticks are the
-same disks across the reset. The image or directory behind a card is never
-written, so the next run starts from it again. The command line and the browser
+A reset (a warm reset: the PM watchdog, which is what the self-update, Linux's
+`reboot` and a panic restart use) rebuilds the machine and carries over what a
+Raspberry Pi 4B d03115 keeps powered: the flash as the self-update wrote it, the
+fuses, the pins of the GPIO expander, the DRAM, the card or e-MMC with what the
+guest wrote to it, and the `--usb` stick with its state. A power-on, which is a
+new run, starts everything new. The VL805, the network peer and the `--otg`
+stick are rebuilt by a reset. This is a reading of the board's behaviour, not a
+measured spec of every part; see [`usb.md`](usb.md#warm-reset). The image or
+directory behind a card is never written, so the next run starts from it again. The command line and the browser
 build carry a machine over with the same code.
 
 ## Checking a boot: `--scenario`

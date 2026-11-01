@@ -139,7 +139,8 @@ applied to the served files as well.
 The USB 3.0 panel's last field is `--usb-wedge host-silent:<seconds>`: with a
 number in it, the stick refuses an address (Linux logs `device not accepting
 address`) when the USB controller first runs later than that many seconds of the
-board's clock after power-on. What it models, the 13.4 s measured on the board
+board's clock after a reset that the guest asks for (a power-on never does it,
+so the first boot is fine). What it models, the 13.4 s measured on the board
 and why the number has to be calibrated for the emulator are in
 [`usb.md`](usb.md#a-stick-that-wedges). The field is part of **Share as a link**.
 

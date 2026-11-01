@@ -94,8 +94,8 @@ the deconfigure.
 ## A stick that wedges
 
 A Raspberry Pi flash drive (`2e8a:0030`, UAS) behind the VL805 of a Raspberry
-Pi 4B d03115 works after a power cycle and, after a warm reboot, sometimes
-fails `Address Device` (Linux: `device not accepting address 2, error -62`).
+Pi 4B d03115 works after a power cycle, however late the host first talks to
+it, and, after a warm reboot, sometimes fails `Address Device` (Linux: `device not accepting address 2, error -62`).
 It fails when the first host contact after the reset comes late. With signed
 boot (`SIGNED_BOOT=1`, SD first) the bootloader makes no contact, so the first
 one is Linux's xHCI probe; with `SIGNED_BOOT=0`, or USB first in `BOOT_ORDER`,
@@ -107,13 +107,18 @@ is at 13.2 s (`boot_delay=1.5` and `1.75`, the stick works) and 13.5 s
 The same happens with every `start4.elf` and every bootloader tried that can
 load a signed image. Why the stick does it is not known.
 
-`--usb-wedge host-silent:<seconds>` models that and nothing else: the first time
-the xHCI controller runs (`USBCMD.RS`) after the reset of the SoC is the first
-the stick hears of a host, and when that is later than `<seconds>` every
-`Address Device` for a SuperSpeed device fails with USB Transaction Error. A
-controller run before the limit, or a later one, changes nothing, and the BCM2711's own xHCI
-and USB 2.0 devices are not touched. It needs `--usb`, works with `--usb-uas`,
-and is a command line option only.
+`--usb-wedge host-silent:<seconds>` models that and nothing else, with the one
+parameter: a stick that stayed powered through a reset of the SoC (see [Warm
+reset](#warm-reset)) takes the first time the xHCI controller runs (`USBCMD.RS`)
+after that reset as the first it hears of a host again, and when that is later
+than `<seconds>` every `Address Device` for a SuperSpeed device fails with USB
+Transaction Error. The first boot after a power-on never wedges the stick. A
+controller run before the limit, or a later one, changes nothing, and the
+BCM2711's own xHCI and USB 2.0 devices are not touched. It needs `--usb`, works
+with `--usb-uas`, and is a command line option only.
+
+The cause is not known. A guess, not proven: the stick starts a timer when it
+loses a host it had, not at power-on.
 
 The limit is model time, and the model's time is not the board's: the
 bootloader's first stage takes about the same, but a 30 MiB `boot.img` takes 41 s
@@ -139,8 +144,32 @@ half in its `pubkey.bin` slot (`--eeprom-pubkey`), and `card.img` holds the
 files as they are (read when `SIGNED_BOOT=0`) beside `boot.img` and `boot.sig`.
 
 Unit tests in `xhci.rs` check the limit: the first run at the limit works, a
-microsecond later wedges, and a later controller reset does not start the clock
-again.
+microsecond later wedges, a later controller reset does not start the clock
+again, and a stick that was just powered on never wedges. A test in `boot.rs`
+checks that a reset carries the stick over and a power-on does not.
+
+## Warm reset
+
+A reset the firmware asks for through the PM watchdog (`PM_WDOG` and `PM_RSTC`
+with a full reset: the bootloader's self-update, the nuboot boot watchdog, a
+UEFI `ResetSystem`, Linux's `reboot` and the restart after a panic) rebuilds the
+SoC and starts the VPU from the boot ROM again. A power-on, which is a new run
+of `pimu boot` or **Power on** in the web page, rebuilds everything.
+
+This is a reading of the Raspberry Pi 4B d03115, not a measured spec of every
+part. It keeps what the board keeps powered, with its state:
+
+* the SDRAM contents, the OTP rows, the SPI flash, `PM_RSTS` partition bits
+  and the GPIO expander;
+* the SD card or e-MMC with what the guest wrote to it;
+* the `--usb` stick, with its state. It is bus-powered from VBUS, which stays on
+  across the reset. The link goes down and comes up again, which the stick takes
+  as a reset: its address and configuration are gone, its disk is not.
+
+What it rebuilds: the VL805 (PERST# is asserted by the reset, so it has no
+firmware and is loaded again through its vendor port), the network peer (a new
+DHCP and TFTP exchange) and the `--otg` stick. A real part may keep more of
+that; nothing here depends on it.
 
 ## Not reproduced
 
