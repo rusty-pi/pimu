@@ -373,9 +373,12 @@ struct EventRing {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Xhci {
     /// A SuperSpeed device stops taking an address when the controller first
-    /// runs later than this after the SoC reset (`--usb-wedge host-silent`).
+    /// runs later than this after the SoC reset (`--usb-wedge host-silent`),
+    /// but only one that had a host before that reset.
     #[serde(skip)]
     host_silent_limit_us: Option<u64>,
+    #[serde(skip)]
+    device_had_a_host: bool,
     #[serde(skip)]
     first_run_us: Option<u64>,
     #[serde(skip)]
@@ -432,6 +435,7 @@ impl Xhci {
             cmd_ccs: true,
             running: false,
             host_silent_limit_us: None,
+            device_had_a_host: false,
             first_run_us: None,
             host_silent_wedged: false,
             scratchpads_ready: false,
@@ -447,10 +451,28 @@ impl Xhci {
         hc
     }
 
-    /// Make SuperSpeed devices stop taking an address if the controller first
-    /// runs more than `limit_us` after the SoC reset.
+    /// Make SuperSpeed devices that stayed powered through a reset
+    /// ([`Xhci::attach_surviving`]) stop taking an address if the controller
+    /// first runs more than `limit_us` after it.
     pub fn set_host_silent_limit(&mut self, limit_us: u64) {
         self.host_silent_limit_us = Some(limit_us);
+    }
+
+    /// The device on root port `port` (1-based) is one that stayed powered
+    /// through the reset of the SoC, which it saw as its host going away: the
+    /// host-silent limit applies to it, and it does not to a device that has
+    /// just been powered on.
+    pub fn attach_surviving(&mut self, port: usize, device: Box<dyn UsbDevice>) {
+        self.attach(port, device);
+        self.device_had_a_host = true;
+    }
+
+    /// Unplug the device on root port `port` (1-based), to carry it to the
+    /// controller of the next boot.
+    pub fn detach(&mut self, port: usize) -> Option<Box<dyn UsbDevice>> {
+        let device = self.ports[port - 1].device.0.take();
+        self.update_link_deadline();
+        device
     }
 
     pub fn attach(&mut self, port: usize, device: Box<dyn UsbDevice>) {
@@ -711,7 +733,7 @@ impl Xhci {
             return;
         }
         self.first_run_us = Some(self.now_us);
-        if self.host_silent_limit_us.is_some_and(|l| self.now_us > l) {
+        if self.device_had_a_host && self.host_silent_limit_us.is_some_and(|l| self.now_us > l) {
             self.host_silent_wedged = true;
             crate::log!(
                 self.log,
@@ -2176,9 +2198,20 @@ mod tests {
     /// Run the controller at `run_at_us`, train the stick's link on root port 2
     /// and ask it for an address; the completion code of `Address Device`.
     fn stick_address_code(limit_us: Option<u64>, run_at_us: u64) -> u32 {
+        stick_address_code_after(true, limit_us, run_at_us)
+    }
+
+    /// As [`stick_address_code`], with the stick either just powered on or one
+    /// that stayed powered through a reset of the SoC.
+    fn stick_address_code_after(survived: bool, limit_us: Option<u64>, run_at_us: u64) -> u32 {
         use crate::periph::usb::MassStorage;
         let mut hc = Xhci::new();
-        hc.attach(2, Box::new(MassStorage::new(vec![0; 4096])));
+        let stick = Box::new(MassStorage::new(vec![0; 4096]));
+        if survived {
+            hc.attach_surviving(2, stick);
+        } else {
+            hc.attach(2, stick);
+        }
         if let Some(limit) = limit_us {
             hc.set_host_silent_limit(limit);
         }
@@ -2251,6 +2284,22 @@ mod tests {
             stick_address_code(None, 900_000_000),
             CC_SUCCESS,
             "no limit"
+        );
+    }
+
+    /// The first power-on is never wedged, however late the host comes.
+    #[test]
+    fn a_stick_that_was_just_powered_on_never_takes_the_host_silent_limit() {
+        let limit = Some(13_400_000);
+        assert_eq!(
+            stick_address_code_after(false, limit, 900_000_000),
+            CC_SUCCESS,
+            "power-on"
+        );
+        assert_eq!(
+            stick_address_code_after(true, limit, 13_400_001),
+            CC_TRANSACTION_ERROR,
+            "after a reset it survived"
         );
     }
 

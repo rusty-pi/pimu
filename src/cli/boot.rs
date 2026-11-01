@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
 
-use pimu::boot::{boot_outcome, locate_fdt, CardEdits, Carry, FlashEdits};
+use pimu::boot::{boot_outcome, locate_fdt, CardEdits, Carry, FlashEdits, USB_ROOT_PORT};
 use pimu::emulator::{Emulator, RunLimits, RunReport};
 use pimu::firmware::Payload;
 use pimu::harness;
@@ -23,10 +23,6 @@ use pimu::vpu::UnimplPolicy;
 use crate::mbox::{mbox_property_exchange, MboxRequest, MboxTag};
 use crate::otp::{Format, OtpFile};
 use crate::{parse_hex_image, parse_u32};
-
-/// Blue socket A: root port 1 is the USB2 port feeding the on-board VIA hub, so a
-/// SuperSpeed fixture goes on port 2 (measured on a Raspberry Pi 4B d03115).
-const USB_ROOT_PORT: usize = 2;
 
 /// `boot --help`. A test holds this and `BootOpts::parse` to the same option list.
 const HELP: &str = "\
@@ -241,7 +237,8 @@ MEDIA AND NETWORK:
     --usb-wedge host-silent:<seconds>
               Make the --usb stick stop taking an address (Address Device
               fails with USB Transaction Error) when the xHCI controller first
-              runs more than <seconds> after the reset of the SoC, as a
+              runs more than <seconds> after a warm reset the stick survived
+              (the first power-on never wedges it), as a
               Raspberry Pi USB flash drive does behind the VL805 of a
               Raspberry Pi 4B d03115 when nothing talks to it for about 13.4 s
               after a warm reset. Model time, not board time: see docs/usb.md.
@@ -1562,6 +1559,9 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
                     println!(
                         "expander: SD_PWR_ON is driven low across the reset, the card has no power"
                     );
+                }
+                if carry.has_stick() {
+                    println!("usb: the stick keeps its power and its state across the reset");
                 }
                 println!();
                 continue 'boot;

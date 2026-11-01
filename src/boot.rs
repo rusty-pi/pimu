@@ -11,10 +11,17 @@ use crate::armstub::Handoff;
 use crate::machine::Machine;
 use crate::periph::fxl6408::Fxl6408;
 use crate::periph::sdcard::Kept;
+use crate::periph::usb::UsbDevice;
+
+/// The VL805's root port the SuperSpeed `--usb` stick sits on: port 1 is the
+/// USB 2.0 port that feeds the on-board hub.
+pub const USB_ROOT_PORT: usize = 2;
 
 /// What a boot leaves for the one after a reset: the flash as the self-update
 /// wrote it, the fuses programmed, the pins of the expander, the PM partition
-/// bits, the DRAM's contents and the card with what the guest wrote to it.
+/// bits, the DRAM's contents, the card with what the guest wrote to it and the
+/// USB stick on the VL805 with its state. A power-on has none of these: a
+/// machine built with no `Carry` left behind starts everything new.
 /// The command line and the browser build both carry a machine over a reset
 /// with this, so that they keep the same things.
 #[derive(Default)]
@@ -25,6 +32,7 @@ pub struct Carry {
     expander: Option<Fxl6408>,
     ram: Option<crate::mem::Contents>,
     card: Option<Kept>,
+    stick: Option<Box<dyn UsbDevice>>,
 }
 
 impl Carry {
@@ -50,7 +58,12 @@ impl Carry {
             expander: machine.bsc_pmic.expander().cloned(),
             ram: Some(machine.ram.take_contents()),
             card: machine.emmc2.keep_card(),
+            stick: machine.pcie.endpoint.detach(USB_ROOT_PORT),
         }
+    }
+
+    pub fn has_stick(&self) -> bool {
+        self.stick.is_some()
     }
 
     /// The pins of the expander as the reset left them, which tell whether the
@@ -80,6 +93,10 @@ impl Carry {
         }
         if let Some(card) = self.card.take() {
             machine.emmc2.restore_card(card);
+        }
+        if let Some(mut stick) = self.stick.take() {
+            stick.reset();
+            machine.pcie.endpoint.attach_surviving(USB_ROOT_PORT, stick);
         }
     }
 }
@@ -411,4 +428,43 @@ pub fn locate_fdt(
         logged_len.max(40)
     };
     Some((addr, read(machine, addr, len)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::periph::usb::MassStorage;
+
+    fn no_edits() -> FlashEdits {
+        FlashEdits::new(false, false, None, &[], false, None).unwrap()
+    }
+
+    fn stick_machine() -> Machine {
+        let mut machine = Machine::new(1 << 20);
+        machine
+            .pcie
+            .endpoint
+            .attach(USB_ROOT_PORT, Box::new(MassStorage::new(vec![0; 4096])));
+        machine
+    }
+
+    #[test]
+    fn a_reset_carries_the_stick_to_the_next_machine_and_a_power_on_does_not() {
+        let mut first = stick_machine();
+        let mut carry = Carry::leave(&mut first, &no_edits());
+        assert!(carry.has_stick());
+        assert!(
+            first.pcie.endpoint.detach(USB_ROOT_PORT).is_none(),
+            "it left the old machine"
+        );
+
+        let mut warm = Machine::new(1 << 20);
+        carry.restore(&mut warm, &[]);
+        assert!(!carry.has_stick());
+        assert!(warm.pcie.endpoint.detach(USB_ROOT_PORT).is_some());
+
+        let mut cold = Machine::new(1 << 20);
+        Carry::first(Vec::new(), None).restore(&mut cold, &[]);
+        assert!(cold.pcie.endpoint.detach(USB_ROOT_PORT).is_none());
+    }
 }

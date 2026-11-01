@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 
-use crate::boot::{boot_outcome, locate_fdt, CardEdits, Carry, FlashEdits};
+use crate::boot::{boot_outcome, locate_fdt, CardEdits, Carry, FlashEdits, USB_ROOT_PORT};
 use crate::emulator::{Emulator, RunEnd, RunLimits};
 use crate::fat::Entry;
 use crate::firmware::bootrom::BootRom;
@@ -26,10 +26,6 @@ use crate::stdio::{HostEvent, HostInput};
 use crate::vpu::UnimplPolicy;
 
 use super::options::Options;
-
-/// Blue socket A: root port 1 is the USB2 port feeding the on-board VIA hub, so a
-/// SuperSpeed fixture goes on port 2 (see `USB_ROOT_PORT` in `src/cli/boot.rs`).
-const USB_ROOT_PORT: usize = 2;
 
 /// A reset that comes back this many times is the firmware giving up.
 const MAX_REBOOTS: u32 = 4;

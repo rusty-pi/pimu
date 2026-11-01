@@ -189,6 +189,16 @@ impl Vl805 {
         self.xhci.attach(port, device);
     }
 
+    /// Plug in a device that stayed powered through the reset of the SoC.
+    pub fn attach_surviving(&mut self, port: usize, device: Box<dyn UsbDevice>) {
+        self.xhci.attach_surviving(port, device);
+    }
+
+    /// Unplug the device on root port `port` (1-based).
+    pub fn detach(&mut self, port: usize) -> Option<Box<dyn UsbDevice>> {
+        self.xhci.detach(port)
+    }
+
     fn cfg_word(&self, off: usize) -> u32 {
         u32::from_le_bytes([
             self.cfg[off],
