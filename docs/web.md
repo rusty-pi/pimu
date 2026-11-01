@@ -184,6 +184,12 @@ them. `xz`-compressed images have to be decompressed first.
   EEPROM image.
 - **The log channels are chosen at power-on.** After a reset the model clock
   starts from 0 again, as in the command line; a `bench` line marks it.
+- **A reset is a warm reset.** When the guest restarts the board (Linux's
+  `reboot`, the restart after a panic, the bootloader's own reset) the page boots
+  again in the same serial console, with the model clock back at 0 and a `bench`
+  line in the log. The card, the SDRAM, the OTP rows and the USB stick stay, as
+  [`usb.md`](usb.md#warm-reset) says; **Power off** and **Power on** start
+  everything new.
 
 ## Tests
 
