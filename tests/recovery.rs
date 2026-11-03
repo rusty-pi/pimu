@@ -3,12 +3,15 @@
 //! silent, so the flash is what says it worked: all of `pieeprom.upd` but its
 //! last 8 bytes, which become the `ts:` of `pieeprom.sig` as a little-endian
 //! word and the word's complement before it. Skipped without the blobs
-//! `scripts/fetch-firmware.sh` fetches.
+//! `scripts/fetch-firmware.sh` fetches. The update is the pinned `pieeprom.bin`
+//! itself, signed with its own digest, a timestamp and `target-soc: 2711` as
+//! `rpi-eeprom-digest` writes them, which is what the MFG-version and
+//! target-SoC checks of a recent `recovery.bin` read.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const CARD_FILES: [&str; 3] = ["recovery.bin", "pieeprom.upd", "pieeprom.sig"];
+const SIGNED_AT: u32 = 1_793_402_435;
 
 fn firmware(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -16,19 +19,35 @@ fn firmware(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn sha256_hex(path: &Path) -> Option<String> {
+    let out = Command::new("sha256sum").arg(path).output().ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    text.split_whitespace().next().map(str::to_string)
+}
+
 #[test]
 fn recovery_bin_flashes_the_update_image_and_stamps_its_timestamp_at_the_end() {
-    let blobs = [CARD_FILES.as_slice(), &["pieeprom.bin"]].concat();
-    if let Some(missing) = blobs.iter().find(|n| !firmware(n).exists()) {
+    if let Some(missing) = ["recovery.bin", "pieeprom.bin"]
+        .iter()
+        .find(|n| !firmware(n).exists())
+    {
         eprintln!("firmware/{missing} not fetched; skipping");
         return;
     }
+    let Some(digest) = sha256_hex(&firmware("pieeprom.bin")) else {
+        eprintln!("no sha256sum; skipping");
+        return;
+    };
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("recovery-card");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    for name in CARD_FILES {
-        std::fs::copy(firmware(name), dir.join(name)).unwrap();
-    }
+    std::fs::copy(firmware("recovery.bin"), dir.join("recovery.bin")).unwrap();
+    std::fs::copy(firmware("pieeprom.bin"), dir.join("pieeprom.upd")).unwrap();
+    std::fs::write(
+        dir.join("pieeprom.sig"),
+        format!("{digest}\nts: {SIGNED_AT}\ntarget-soc: 2711\n"),
+    )
+    .unwrap();
     let flashed = dir.join("flash-after.bin");
 
     // The firmware keeps resetting into recovery.bin, which is still on the
@@ -39,7 +58,7 @@ fn recovery_bin_flashes_the_update_image_and_stamps_its_timestamp_at_the_end() {
         .arg(firmware("pieeprom.bin"))
         .arg("--sd")
         .arg(&dir)
-        .args(["--max-wall", "120", "-q", "--dump-eeprom"])
+        .args(["--max-wall", "40", "-q", "--dump-eeprom"])
         .arg(&flashed)
         .output()
         .expect("run pimu boot");
