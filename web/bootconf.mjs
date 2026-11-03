@@ -89,6 +89,7 @@ export const GROUPS = [
       text("HTTP_HOST", "HTTP server", "Host the HTTP boot fetches boot.img from."),
       int("HTTP_PORT", "HTTP port", "", "80"),
       text("HTTP_PATH", "HTTP path", "", { default: "net_install" }),
+      bool("HTTP_ALLOW_REDIRECTS", "Follow HTTP redirects", "Redirects are refused unless this is set, and only with a changed HTTP_HOST.", "0"),
       text("HTTP_CACERT_HASH", "CA certificate hash", "SHA-256 of the certificate to trust."),
       bool("NET_INSTALL_ENABLED", "Network install", "Allow the Raspberry Pi Imager network install.", "1"),
       bool("NET_INSTALL_AT_POWER_ON", "Network install at power on", "", "0"),
