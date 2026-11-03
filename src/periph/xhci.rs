@@ -177,6 +177,8 @@ pub struct Caps {
     /// where a USB3 port trains its link itself.
     pub usb2_ports: &'static [bool],
     pub max_slots: usize,
+    /// Where `USBLEGSUP` sits: its two semaphore bits take writes.
+    pub legsup: u32,
     /// Where the runtime registers and the doorbell array sit, as `RTSOFF` and
     /// `DBOFF` announce: the two controllers do not share a layout.
     pub runtime: u32,
@@ -220,11 +222,16 @@ pub const VL805: Caps = Caps {
     ],
     usb2_ports: &[true, false, false, false, false],
     max_slots: MAX_SLOTS,
+    legsup: regs::USBLEGSUP,
     runtime: RTSOFF,
     doorbell: DBOFF,
     tag: "",
 };
 const _: () = assert!(VL805.usb2_ports.len() == PORTS);
+
+const USBLEGSUP_BIOS_OWNED: u32 = 1 << 16;
+const USBLEGSUP_OS_OWNED: u32 = 1 << 24;
+const USBLEGSUP_RW: u32 = USBLEGSUP_BIOS_OWNED | USBLEGSUP_OS_OWNED;
 
 const USBSTS_RW1C: u32 = USBSTS_HSE | USBSTS_EINT | USBSTS_PCD | USBSTS_SRE;
 
@@ -587,6 +594,9 @@ impl Xhci {
     }
 
     fn read_word(&mut self, off: u32) -> u32 {
+        if off == self.caps.legsup {
+            return self.caps.word(off).unwrap_or(0) | (self.reg(off) & USBLEGSUP_RW);
+        }
         if let Some(v) = self.caps.word(off) {
             return v;
         }
@@ -647,6 +657,10 @@ impl Xhci {
         let old = self.reg(word_off);
         let new = (old & !mask) | value;
 
+        if word_off == self.caps.legsup {
+            self.set_reg(word_off, new & USBLEGSUP_RW);
+            return;
+        }
         if word_off == USBSTS {
             // Write-1-to-clear: the stop path writes all-ones here.
             self.set_reg(word_off, old & !(value & USBSTS_RW1C));
@@ -1508,6 +1522,42 @@ mod tests {
         assert_eq!(mem.read32(0x0173_8500), 0, "not the low alias");
         mem.write32(0x2_0000_0000, 0xDEAD_BEEF);
         assert_eq!(mem.read32(0x2_0000_0000), 0);
+    }
+
+    /// An OS claims the controller as xHCI 1.2 §4.22.1 says and crab-usb's
+    /// `legacy_init` does: set `HC OS Owned Semaphore`, then wait for it to
+    /// read back set with `HC BIOS Owned Semaphore` clear.
+    #[test]
+    fn an_os_can_claim_the_controller_through_usblegsup() {
+        let mut hc = Xhci::new();
+        let mut mem = VecMem::default();
+        let reset = hc.read(regs::USBLEGSUP, Width::Word);
+        assert_eq!(reset, regs::USBLEGSUP_RESET);
+        hc.write(
+            regs::USBLEGSUP,
+            Width::Word,
+            reset | USBLEGSUP_OS_OWNED,
+            &mut mem,
+        );
+        let claimed = hc.read(regs::USBLEGSUP, Width::Word);
+        assert_ne!(claimed & USBLEGSUP_OS_OWNED, 0, "OS owned reads back");
+        assert_eq!(claimed & USBLEGSUP_BIOS_OWNED, 0, "BIOS owned stays clear");
+        assert_eq!(
+            claimed & !USBLEGSUP_RW,
+            regs::USBLEGSUP_RESET,
+            "the rest is as measured"
+        );
+    }
+
+    #[test]
+    fn usblegsup_keeps_the_measured_bits_whatever_is_written() {
+        let mut hc = Xhci::new();
+        let mut mem = VecMem::default();
+        hc.write(regs::USBLEGSUP, Width::Word, 0xFFFF_FFFF, &mut mem);
+        assert_eq!(
+            hc.read(regs::USBLEGSUP, Width::Word),
+            regs::USBLEGSUP_RESET | USBLEGSUP_RW
+        );
     }
 
     #[test]

@@ -45,7 +45,7 @@ Level-triggered, so the line follows interrupter 0's `IMAN.IP` (GIC id 208 — L
 | `0x050` | [`DCBAAP_LO`](#dcbaap_lo) | rw | 32 | 1, best high |
 | `0x054` | [`DCBAAP_HI`](#dcbaap_hi) | rw | 32 | 1, best high |
 | `0x058` | [`CONFIG`](#config) | rw | 32 | 1, best high |
-| `0x880` | [`USBLEGSUP`](#usblegsup) | r | 32 | 2, best high |
+| `0x880` | [`USBLEGSUP`](#usblegsup) | rw | 32 | 2, best high |
 | `0x890` | [`SUPPORTED_USB2`](#supported_usb2) | r | 32 | 2, best high |
 | `0x894` | [`SUPPORTED_USB2_NAME`](#supported_usb2_name) | r | 32 | 2, best high |
 | `0x898` | [`SUPPORTED_USB2_PORTS`](#supported_usb2_ports) | r | 32 | 2, best high |
@@ -247,14 +247,27 @@ Sources:
 
 ## `USBLEGSUP`
 
-Offset `0x880` · access `r` · 32 bits · reset `0x401`
+Offset `0x880` · access `rw` · 32 bits · reset `0x401`
 
-Extended capability: USB legacy support, next at `+0x10` dwords (`0xB0`).
+Extended capability: USB legacy support, next at `+0x10` dwords (`0xB0`). Only the two semaphore bits take writes.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 16 | `HC_BIOS_OWNED` | rw | HC BIOS Owned Semaphore: stored, and reads back as written. It resets clear, so an OS that sets `HC_OS_OWNED` finds the handoff already done. |
+| 24 | `HC_OS_OWNED` | rw | HC OS Owned Semaphore: stored, and reads back as written. |
 
 Sources:
 
 - standard (high): xHCI 1.1, 7.1: capability id 1, with the next pointer in bits 15:8
 - measured (high): Raspberry Pi 4B d03115, 32-bit `/dev/mem` read of `0xFE9C0000` with the pinned `start4.elf` running and `otg_mode=1` set, so the controller is powered: the first extended capability, at `xECP` * 4 = `0x880`, reads `0x00000401`
+
+`HC_BIOS_OWNED` sources:
+
+- standard (high): xHCI 1.2, 7.1.1 `USBLEGSUP` and 4.22.1
+
+`HC_OS_OWNED` sources:
+
+- standard (high): xHCI 1.2, 7.1.1 `USBLEGSUP` and 4.22.1
 
 ## `SUPPORTED_USB2`
 

@@ -364,13 +364,35 @@ confidence = "high"
 [[register]]
 name   = "USBLEGSUP"
 offset = 0xA0
-access = "r"
+access = "rw"
 reset  = 0x00000401
-notes  = "Extended capability: USB legacy support, next at `+0x10` dwords (`0xB0`)."
+notes  = "Extended capability: USB legacy support, next at `+0x10` dwords (`0xB0`). Only the two semaphore bits take writes."
 
 [[register.source]]
 kind       = "measured"
 ref        = "Raspberry Pi 4B d03115 `/dev/mem`"
+confidence = "high"
+
+[[register.field]]
+name   = "HC_BIOS_OWNED"
+bits   = "16"
+access = "rw"
+notes  = "HC BIOS Owned Semaphore: stored, and reads back as written. It resets clear, so an OS that sets `HC_OS_OWNED` finds the handoff already done."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.2, 7.1.1 `USBLEGSUP` and 4.22.1"
+confidence = "high"
+
+[[register.field]]
+name   = "HC_OS_OWNED"
+bits   = "24"
+access = "rw"
+notes  = "HC OS Owned Semaphore: stored, and reads back as written."
+
+[[register.field.source]]
+kind       = "standard"
+ref        = "xHCI 1.2, 7.1.1 `USBLEGSUP` and 4.22.1"
 confidence = "high"
 
 [[register]]

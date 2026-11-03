@@ -112,6 +112,7 @@ pub const CAPS: Caps = Caps {
     ],
     usb2_ports: &[true],
     max_slots: (regs::HCSPARAMS1_RESET & 0xFF) as usize,
+    legsup: regs::USBLEGSUP,
     runtime: regs::RTSOFF_RESET,
     doorbell: regs::DBOFF_RESET,
     tag: "otg ",
