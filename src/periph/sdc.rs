@@ -31,17 +31,18 @@ use std::collections::BTreeMap;
 use crate::bus::{BusResult, MmioDevice, Width};
 
 use crate::spec::sdc::{
-    REFRESH as REFRESH_WORD, REFRESH_INTERVAL_SHIFT, STATUS, STATUS_ADDR_MASK as MR_ADDR,
-    STATUS_CHANNEL_MASK as MR_CHANNEL, STATUS_COUNT, STATUS_DEVICE_MASK as MR_DEVICE,
-    STATUS_DONE_MASK as STATUS_READY, STATUS_ERROR_MASK as MR_ERROR, STATUS_RDATA_MASK as MR_RDATA,
+    CS, CS_UP_MASK, REFRESH as REFRESH_WORD, REFRESH_INTERVAL_SHIFT, STATUS,
+    STATUS_ADDR_MASK as MR_ADDR, STATUS_CHANNEL_MASK as MR_CHANNEL, STATUS_COUNT,
+    STATUS_DEVICE_MASK as MR_DEVICE, STATUS_DONE_MASK as STATUS_READY,
+    STATUS_ERROR_MASK as MR_ERROR, STATUS_RDATA_MASK as MR_RDATA,
     STATUS_RDATA_SHIFT as MR_RDATA_SHIFT, STATUS_STRIDE, STATUS_WDATA_SHIFT as MR_WDATA_SHIFT,
-    STATUS_WRITE_MASK as MR_WRITE, TIMING, TIMING0,
+    STATUS_WRITE_MASK as MR_WRITE, TIMING,
 };
 use crate::spec::Coverage;
 
 pub const COVERAGE: Coverage = Coverage {
     block: "sdc",
-    decoded: &[TIMING0, REFRESH_WORD, TIMING, STATUS],
+    decoded: &[CS, REFRESH_WORD, TIMING, STATUS],
 };
 
 const MR_PORT: u32 = STATUS;
@@ -217,6 +218,9 @@ impl MmioDevice for Sdc {
         if status_slot(off) {
             return Ok(stored | STATUS_READY);
         }
+        if off == CS {
+            return Ok(stored | CS_UP_MASK);
+        }
         Ok(stored)
     }
 
@@ -249,6 +253,14 @@ mod tests {
     fn read_mr(sdc: &mut Sdc, cmd: u32) -> u32 {
         sdc.write(MR_PORT, Width::Word, cmd).unwrap();
         (port(sdc) & MR_RDATA) >> MR_RDATA_SHIFT
+    }
+
+    #[test]
+    fn controller_reads_up_whatever_the_firmware_wrote() {
+        let mut sdc = Sdc::new();
+        assert_eq!(sdc.read(CS, Width::Word).unwrap() & CS_UP_MASK, CS_UP_MASK);
+        sdc.write(CS, Width::Word, 0x0040_0042).unwrap();
+        assert_eq!(sdc.read(CS, Width::Word).unwrap(), 0x0040_8042);
     }
 
     #[test]

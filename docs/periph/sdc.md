@@ -16,20 +16,31 @@ Sources:
 
 | Offset | Name | Access | Width | Sources |
 |---|---|---|---|---|
-| `0x000` | [`TIMING0`](#timing0) | rw | 32 | 1, best medium |
+| `0x000` | [`CS`](#cs) | rw | 32 | 3, best high |
 | `0x004` | [`REFRESH`](#refresh) | rw | 32 | 4, best high |
 | `0x008`–`0x030` (11 × 0x4) | [`TIMING`](#timing) | rw | 32 | 1, best medium |
 | `0x09C`–`0xF9C` (31 × 0x80) | [`STATUS`](#status) | rw | 32 | 2, best high |
 
-## `TIMING0`
+## `CS`
 
 Offset `0x000` · access `rw` · 32 bits
 
-First word of the DRAM timing table the bootloader programs.
+Controller control/status (`SD_CS`). The bootloader writes `0x004000ea`, `0x004000c3` and `0x00400042` around the timing table and the PHY training. From the 2026-10-15 bootloader it then waits for `UP` before going on; the other bits read back as written.
+
+| Bits | Field | Access | Notes |
+|---|---|---|---|
+| 15 | `UP` | rw | The controller is up. Set on the reference board once the bootloader has configured it; the model sets it always. |
 
 Sources:
 
 - decompile (medium): bootloader writes `+0x00..+0x30` after PHY training
+- decompile (high): 2026-10-15 bootloader `0x8000c9d8`: reads it up to 1001 times, 10 us apart, until bit 15 is set, else logs `SDC not up SD_CS` and fails with `BOOT ERROR: code 8 - 'SDRAM failure'`
+- measured (high): `/dev/mem` at `0xFE001000` on a Raspberry Pi 4B d03115 under Linux 6.12.109+rpt-rpi-v8: `0x00218242`
+
+`UP` sources:
+
+- measured (high): `0x00218242` on a Raspberry Pi 4B d03115 has bit 15 set
+- decompile (high): 2026-10-15 bootloader `0x8000c9da`: `btest r1, 15` on the `0x7E001000` read
 
 ## `REFRESH`
 
