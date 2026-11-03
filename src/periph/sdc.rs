@@ -24,8 +24,9 @@
 //! registers read 0 and writes are lost. An 8 GB Raspberry Pi 4B d03115 instead
 //! reports `total-size: 64Gbit` and `rank 2`, 32 Gb per die.
 //!
-//! MR5, the manufacturer, stays at its reset 0 (printed as `'Unknown'`); it is
-//! never part of the MCB key. Every other mode register reads its reset 0.
+//! MR5, the manufacturer, reads a fixed non-zero ID on every fitted rank: the
+//! 2026-10-30 bootloader probes it, and it is never part of the MCB key. Every
+//! other mode register reads its reset 0.
 use std::collections::BTreeMap;
 
 use crate::bus::{BusResult, MmioDevice, Width};
@@ -57,6 +58,14 @@ fn status_slot(off: u32) -> bool {
 /// Raspberry Pi 4B d03115 reports right after the ARM handover.
 const MR4_REFRESH_RATE: u32 = 4;
 const MR4_RESET: u8 = 2;
+
+/// LPDDR4 MR5 (manufacturer ID). The 2026-10-30 bootloader reads it from every
+/// fitted rank before it identifies the part, and logs `SDRAM MR5 probe failed`
+/// for a rank that answers 0; a Raspberry Pi 4B d03115 prints no such line, so
+/// its dies answer something else. Which vendor it is cannot be read from the
+/// board, and the probe accepts any non-zero ID, so this is Micron's.
+const MR5_MANUFACTURER_ID: u32 = 5;
+const MR5_FITTED: u8 = 0xFF;
 
 /// LPDDR4 MR8 (basic configuration 4): density per die in `OP[5:2]`, I/O
 /// width in `OP[7:6]`. `0b0100` is 16 Gb and `0b0110` 32 Gb; width 0 is x16.
@@ -157,6 +166,7 @@ impl Sdc {
             for chan in [false, true] {
                 mode_regs.insert((device, chan, MR4_REFRESH_RATE as u8), MR4_RESET);
                 mode_regs.insert((device, chan, MR8_BASIC_CONFIG as u8), dram.mr8());
+                mode_regs.insert((device, chan, MR5_MANUFACTURER_ID as u8), MR5_FITTED);
             }
         }
         Sdc {
@@ -284,6 +294,19 @@ mod tests {
         .unwrap();
         assert_eq!(read_mr(&mut sdc, 13), 0x5A);
         assert_eq!(read_mr(&mut sdc, MR_CHANNEL | 13), 0);
+    }
+
+    #[test]
+    fn every_fitted_rank_names_a_manufacturer() {
+        let mut sdc = Sdc::with_dram(Dram::for_memory(8 << 30));
+        for device in [0, MR_DEVICE] {
+            for channel in [0, MR_CHANNEL] {
+                assert_ne!(read_mr(&mut sdc, device | channel | 5), 0);
+            }
+        }
+        let mut single = Sdc::with_dram(Dram::for_memory(2 << 30));
+        assert_ne!(read_mr(&mut single, 5), 0);
+        assert_eq!(read_mr(&mut single, MR_DEVICE | 5), 0, "no second rank");
     }
 
     #[test]
