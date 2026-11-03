@@ -2,9 +2,9 @@
 # Instructions each core retired in this boot: vpu0 and vpu1 on the
 # VideoCore, vpu1 only once the firmware woke it, then arm0.. once the ARM
 # is released. `boot --scenario <file> --record` rewrites this file.
-vpu0: 1061271336
+vpu0: 1061907310
 vpu1: 125
-arm0: 285030967
-arm1: 1401868669
-arm2: 9753742
-arm3: 203740164
+arm0: 285229882
+arm1: 1376251519
+arm2: 33573685
+arm3: 199351221

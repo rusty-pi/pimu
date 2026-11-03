@@ -1,7 +1,7 @@
 
-[t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
-[t] MFG_VER: 1
-[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] RPi: BOOTSYS release VERSION:13c4219f DATE: 2026/10/30 TIME: 23:20:35
+[t] MFG_VER: 2
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1793402435 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] PM_RSTS 00000020
 [t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
 [t] EEPROM ID 0xef3013
@@ -9,8 +9,8 @@
 [t] part 00000000 reset_info 00000000
 [t] uSD voltage 3.3V
 [t] init_sdram_1350
-[t] Initialising SDRAM rank 2 total-size: 64Gbit part: 0 (0x14 0x00) odt: 0
-[t] memsys_init: 0 64Gbit MCB 0x80015ff0: 11696
+[t] Initialising SDRAM rank 2 total-size: 64Gbit part: 0 (0x14 0x14) odt: 0
+[t] memsys_init: 0 64Gbit MCB 0x80015ff0: 12384
 [t] DDR 3200 Mbps dual-rank:1 byte-mode:0 size-gbit:64 part-config:0 odt:0
 [t] SD_SB 11013130
 [t] OTP boardrev d03115 bootrom 8b0 8b0
@@ -18,9 +18,9 @@
 [t] VC-JTAG unlocked
 
 
-[t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
-[t] MFG_VER: 1
-[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev d03115 stc [n]
+[t] RPi: BOOTLOADER release VERSION:13c4219f DATE: 2026/10/30 TIME: 23:20:35
+[t] MFG_VER: 2
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1793402435 serial 1aa2bb31 boardrev d03115 stc [n]
 [t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] PCI0 init
@@ -30,7 +30,7 @@
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
 [t] USBSTS 1
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
-[t] xHC0 ports 5 slots 32 intrs 4
+[t] xHC0 ports 5 slots 31 intrs 4
 [t] SD_OC: 0
 [t] Boot mode: SD (01) order f4
 [t] USB2[1] 400202e1 connected
@@ -65,9 +65,9 @@ CSD: 400e00325b590000023f7f800a400000
 [t] Read start4.elf bytes  2298048 hnd 0x4
 [t] Read fixup4.dat bytes     5512 hnd 0x467
 [t] 0x00d03115 0x00000000 0x00003fff
-[t] MEM GPU: 76 ARM: 948 TOTAL: 1024
+[t] MEM GPU: 76 ARM: 947 TOTAL: 1023
 [t] Firmware: f5e89631afbb7b4db1bb28971eb79d74fcc84c7d Aug 10 2026 18:21:35
-[t] Starting start4.elf @ 0xfec00200 partition 1
+[t] Starting start4.elf @ 0xfeb00200 partition 1
 [t] XHCI-STOP
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
 [t] USBSTS 18
@@ -133,13 +133,13 @@ MESS:[t]:0: 'console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=
 MESS:[t]:0: brfs: File read: 97 bytes
 MESS:[t]:0: brfs: File read: /mfs/sd/kernel8.img
 MESS:[t]:0: Loaded 'kernel8.img' to 0x200000 size 0x9fd5b1
-MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1d9)
+MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1dd)
 MESS:[t]:0: uart: Set PL011 baud rate to 103448.300000 Hz
 MESS:[t]:0: uart: Baud rate change done...
 MESS:[t]:0: uart: Baud rate change done...
 MESS:[t]:0: gpioman: gpioman_get_pin_num: pin SDCARD_CONTROL_POWER not defined
 MESS:[t]:0: Watchdog stopped
-MESS:[t]:0: arm_loader: Starting ARM with 948MB
+MESS:[t]:0: arm_loader: Starting ARM with 947MB
 [t] Booting Linux on physical CPU 0x0000000000 [0x410fd083]
 [t] Linux version 6.18.46-v8+ (dom@buildbot) (aarch64-linux-gnu-gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #1999 SMP PREEMPT Mon Aug 24 15:30:47 BST 2026
 [t] KASLR enabled
@@ -152,8 +152,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] Reserved memory: created CMA memory pool at 0x000000000ec00000, size 512 MiB
 [t] OF: reserved mem: initialized node linux,cma, compatible id shared-dma-pool
 [t] OF: reserved mem: 0x000000000ec00000..0x000000002ebfffff (524288 KiB) map reusable linux,cma
-[t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7361a (0 KiB) nomap non-reusable nvram@0
-[t] OF: reserved mem: 0x000000003ef73380..0x000000003ef7357f (0 KiB) nomap non-reusable nvram@1
+[t] OF: reserved mem: 0x000000003ee73400..0x000000003ee735ff (0 KiB) nomap non-reusable nvram@1
 [t] NUMA: Faking a node at [mem 0x0000000000000000-0x00000001ffffffff]
 [t] Faking node 0 at [mem 0x0000000000000000-0x0000000103ffffff] (4160MB)
 [t] Faking node 1 at [mem 0x0000000104000000-0x00000001ffffffff] (4032MB)
@@ -165,13 +164,13 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t]   Normal   [mem 0x0000000100000000-0x00000001ffffffff]
 [t] Movable zone start for each node
 [t] Early memory node ranges
-[t]   node   0: [mem 0x0000000000000000-0x000000003b3fffff]
+[t]   node   0: [mem 0x0000000000000000-0x000000003b2fffff]
 [t]   node   0: [mem 0x0000000040000000-0x00000000fbffffff]
 [t]   node   0: [mem 0x0000000100000000-0x0000000103ffffff]
 [t]   node   1: [mem 0x0000000104000000-0x00000001ffffffff]
 [t] Initmem setup node 0 [mem 0x0000000000000000-0x0000000103ffffff]
 [t] Initmem setup node 1 [mem 0x0000000104000000-0x00000001ffffffff]
-[t] On node 0, zone DMA32: 19456 pages in unavailable ranges
+[t] On node 0, zone DMA32: 19712 pages in unavailable ranges
 [t] On node 0, zone Normal: 16384 pages in unavailable ranges
 [t] percpu: Embedded 33 pages/cpu s95896 r8192 d31080 u135168
 [t] Detected PIPT I-cache on CPU0
@@ -184,16 +183,16 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: ARM erratum 1742098
 [t] CPU features: detected: ARM errata 1165522, 1319367, or 1530923
 [t] alternatives: applying boot alternatives
-[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=2 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
+[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=2 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3eb00000 vc_mem.mem_size=0x3ff00000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
 [t] cgroup: Disabling memory control group subsystem
 [t] mempolicy: NUMA default policy overridden to 'interleave:0-1'
 [t] DMA IOMMU NUMA default policy overridden to 'interleave:0-1'
 [t] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
 [t] software IO TLB: area num 4.
-[t] software IO TLB: mapped [mem 0x0000000037400000-0x000000003b400000] (64MB)
+[t] software IO TLB: mapped [mem 0x0000000037300000-0x000000003b300000] (64MB)
 [t] Fallback order for Node 0: 0 1 
 [t] Fallback order for Node 1: 1 0 
-[t] Built 2 zonelists, mobility grouping on.  Total pages: 2061312
+[t] Built 2 zonelists, mobility grouping on.  Total pages: 2061056
 [t] Policy zone: Normal
 [t] mem auto-init: stack:off, heap alloc:off, heap free:off
 [t] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=2
@@ -244,7 +243,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459876K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243292K reserved, 524288K cma-reserved)
+[t] Memory: 7458696K/8244224K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -352,7 +351,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] pcieport 0000:00:00.0: AER: enabled with IRQ 27
 [t] Serial: 8250/16550 driver, 1 ports, IRQ sharing enabled
 [t] iproc-rng200 fe104000.rng: hwrng registered
-[t] vc-mem: phys_addr:0x00000000 mem_base=0x3ec00000 mem_size:0x40000000(1024 MiB)
+[t] vc-mem: phys_addr:0x00000000 mem_base=0x3eb00000 mem_size:0x3ff00000(1023 MiB)
 [t] brd: module loaded
 [t] loop: module loaded
 [t] Loading iSCSI transport class v2.0-870.
@@ -417,8 +416,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] Reserved memory: created CMA memory pool at 0x000000000ec00000, size 512 MiB
 [t] OF: reserved mem: initialized node linux,cma, compatible id shared-dma-pool
 [t] OF: reserved mem: 0x000000000ec00000..0x000000002ebfffff (524288 KiB) map reusable linux,cma
-[t] OF: reserved mem: 0x000000003ef735c0..0x000000003ef7361a (0 KiB) nomap non-reusable nvram@0
-[t] OF: reserved mem: 0x000000003ef73380..0x000000003ef7357f (0 KiB) nomap non-reusable nvram@1
+[t] OF: reserved mem: 0x000000003ee73400..0x000000003ee735ff (0 KiB) nomap non-reusable nvram@1
 [t] NUMA: Faking a node at [mem 0x0000000000000000-0x00000001ffffffff]
 [t] Faking node 0 at [mem 0x0000000000000000-0x0000000103ffffff] (4160MB)
 [t] Faking node 1 at [mem 0x0000000104000000-0x00000001ffffffff] (4032MB)
@@ -430,13 +428,13 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t]   Normal   [mem 0x0000000100000000-0x00000001ffffffff]
 [t] Movable zone start for each node
 [t] Early memory node ranges
-[t]   node   0: [mem 0x0000000000000000-0x000000003b3fffff]
+[t]   node   0: [mem 0x0000000000000000-0x000000003b2fffff]
 [t]   node   0: [mem 0x0000000040000000-0x00000000fbffffff]
 [t]   node   0: [mem 0x0000000100000000-0x0000000103ffffff]
 [t]   node   1: [mem 0x0000000104000000-0x00000001ffffffff]
 [t] Initmem setup node 0 [mem 0x0000000000000000-0x0000000103ffffff]
 [t] Initmem setup node 1 [mem 0x0000000104000000-0x00000001ffffffff]
-[t] On node 0, zone DMA32: 19456 pages in unavailable ranges
+[t] On node 0, zone DMA32: 19712 pages in unavailable ranges
 [t] On node 0, zone Normal: 16384 pages in unavailable ranges
 [t] percpu: Embedded 33 pages/cpu s95896 r8192 d31080 u135168
 [t] Detected PIPT I-cache on CPU0
@@ -449,16 +447,16 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: ARM erratum 1742098
 [t] CPU features: detected: ARM errata 1165522, 1319367, or 1530923
 [t] alternatives: applying boot alternatives
-[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=2 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
+[t] Kernel command line: earlycon keep_bootcon kvm-arm.mode=none coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=32 snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0 snd_bcm2835.enable_hdmi=0  numa=fake=2 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=02:00:5E:00:53:01 vc_mem.mem_base=0x3eb00000 vc_mem.mem_size=0x3ff00000  console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait
 [t] cgroup: Disabling memory control group subsystem
 [t] mempolicy: NUMA default policy overridden to 'interleave:0-1'
 [t] DMA IOMMU NUMA default policy overridden to 'interleave:0-1'
 [t] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
 [t] software IO TLB: area num 4.
-[t] software IO TLB: mapped [mem 0x0000000037400000-0x000000003b400000] (64MB)
+[t] software IO TLB: mapped [mem 0x0000000037300000-0x000000003b300000] (64MB)
 [t] Fallback order for Node 0: 0 1 
 [t] Fallback order for Node 1: 1 0 
-[t] Built 2 zonelists, mobility grouping on.  Total pages: 2061312
+[t] Built 2 zonelists, mobility grouping on.  Total pages: 2061056
 [t] Policy zone: Normal
 [t] mem auto-init: stack:off, heap alloc:off, heap free:off
 [t] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=2
@@ -509,7 +507,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] CPU features: detected: CRC32 instructions
 [t] CPU features: detected: PMUv3
 [t] alternatives: applying system-wide alternatives
-[t] Memory: 7459876K/8245248K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243292K reserved, 524288K cma-reserved)
+[t] Memory: 7458696K/8244224K available (14912K kernel code, 2446K rwdata, 5080K rodata, 5632K init, 505K bss, 243288K reserved, 524288K cma-reserved)
 [t] devtmpfs: initialized
 [t] Enabled cp15_barrier support
 [t] Enabled setend support
@@ -617,7 +615,7 @@ MESS:[t]:0: arm_loader: Starting ARM with 948MB
 [t] pcieport 0000:00:00.0: AER: enabled with IRQ 27
 [t] Serial: 8250/16550 driver, 1 ports, IRQ sharing enabled
 [t] iproc-rng200 fe104000.rng: hwrng registered
-[t] vc-mem: phys_addr:0x00000000 mem_base=0x3ec00000 mem_size:0x40000000(1024 MiB)
+[t] vc-mem: phys_addr:0x00000000 mem_base=0x3eb00000 mem_size:0x3ff00000(1023 MiB)
 [t] brd: module loaded
 [t] loop: module loaded
 [t] Loading iSCSI transport class v2.0-870.
@@ -714,9 +712,9 @@ Linux aarch64
 cpus=4
 / # \x1b[6necj\x08\x1b[Jho pimu-$((6*7))
 pimu-42
-/ # \x1b[6necho -ne 'Hello, world!\0\0\0' |[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
+/ # \x1b[6necho -ne 'Hello, world!\0\0\0' | rpi-fw-crypto hmac --in /proc/s[t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
 [t] usb 1-1: new high-speed USB device number 2 using xhci_hcd
- rpi-fw-crypto hmac --in /proc/self/fd/0 --k
+elf/fd/0 --k
 
 ey-id 1 --outform hex; echo
 0eb6f96f3a97b37bb065eb014f76fd488df48682ed6ab4f14cdae0e8a26e1e9d
