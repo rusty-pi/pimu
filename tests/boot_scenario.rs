@@ -150,7 +150,7 @@ fn the_recorded_golden_reaches_the_arm_handover() {
         "PM_RSTS 00000020",
         "*** Restart logging",
         "Loaded 'kernel8.img'",
-        "arm_loader: Starting ARM with 948MB",
+        "arm_loader: Starting ARM with 947MB",
     ] {
         assert!(golden.contains(needle), "golden is missing {needle:?}");
     }
@@ -169,7 +169,7 @@ fn a_changed_transcript_fails_the_golden_check() {
     let scn = scenario();
     let golden = std::fs::read_to_string(scn.golden_path().unwrap()).expect("read golden");
 
-    let broken = golden.replacen("948MB", "947MB", 1);
+    let broken = golden.replacen("947MB", "948MB", 1);
     assert_ne!(broken, golden, "the golden should mention the memory split");
     match boot::check_golden(&scn, &broken).expect("golden check") {
         GoldenCheck::Mismatch(diff) => {

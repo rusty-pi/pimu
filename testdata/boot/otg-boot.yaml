@@ -35,8 +35,8 @@ milestones:
   - why: "BOOT_ORDER 0x5 reached the bootloader: the Broadcom USB controller, not the VL805."
     line: "Boot mode: BCM-USB-MSD (05)"
 
-  - why: "The bootloader reads the capability registers of the block at 0x7E9C0000 and has to find a controller with one root port: on the catch-all stub it read zeroes and printed `USB xHC init failed`."
-    line: "xHC0 ports 1 slots 64 intrs 1"
+  - why: "The bootloader reads the capability registers of the block at 0x7E9C0000 and has to find a controller with one root port: on the catch-all stub it read zeroes and printed `USB xHC init failed`. The block advertises 64 slots; the 2026-10-30 bootloader logs at most 31."
+    line: "xHC0 ports 1 slots 31 intrs 1"
 
   - why: "The stick enumerates on the one root port, at high speed: 512-byte bulk endpoints, not the SuperSpeed 1024."
     line: ["MSD device [01:00] 2.00", "ep 82#512 01#512"]

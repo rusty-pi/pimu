@@ -15,7 +15,7 @@ FIRMWARE_REF="${FIRMWARE_REF:-1.20260824}"
 # raspberrypi/rpi-eeprom: channel + dated image for pieeprom.bin
 EEPROM_REF="${EEPROM_REF:-master}"
 EEPROM_CHANNEL="${EEPROM_CHANNEL:-latest}"
-EEPROM_DATE="${EEPROM_DATE:-2026-08-04}"
+EEPROM_DATE="${EEPROM_DATE:-2026-10-30}"
 EEPROM_VL805="${EEPROM_VL805:-000138c0}"
 # pftf/RPi4: the RPi4 UEFI firmware, as a release zip holding RPI_EFI.fd.
 # scripts/make-uefi-sd.sh puts it on a card as the armstub, which is what the

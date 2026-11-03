@@ -36,7 +36,7 @@ repository straight off GitHub:
 ```bash
 docker run --rm ghcr.io/rusty-pi/pimu:latest boot \
   https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/ \
-  --eeprom https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-08-04.bin \
+  --eeprom https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-10-30.bin \
   --config-txt arm_64bit=1 --config-txt enable_uart=1 --config-txt uart_2ndstage=1 \
   --config-txt dtoverlay=disable-bt --cmdline "console=ttyAMA0,115200 earlycon"
 ```

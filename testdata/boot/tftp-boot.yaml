@@ -44,7 +44,7 @@ milestones:
     line: ["MESS:", "Loaded 'kernel8.img'"]
 
   - why: "The goal: the VPU hands the board over to the ARM, with no SD card in the machine."
-    line: "arm_loader: Starting ARM with 948MB"
+    line: "arm_loader: Starting ARM with 947MB"
 
   - why: "The identity is the same however the board booted: same fuses (rows 28/35/30/64/65), same pinned id."
     line: ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]

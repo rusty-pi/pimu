@@ -102,8 +102,8 @@ milestones:
       byte-identical to the real board, a Raspberry Pi 4B d03115's bootloader log.
     line: "xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb"
 
-  - why: "xHCI port and slot counts, same source as the capability registers above."
-    line: "xHC0 ports 5 slots 32 intrs 4"
+  - why: "xHCI port and slot counts, same source as the capability registers above. The VL805 advertises 32 slots and the 2026-10-30 bootloader logs 31, as a Raspberry Pi 4B d03115 does."
+    line: "xHC0 ports 5 slots 31 intrs 4"
 
   - why: "The PCIe link never trained: the bootloader prints this instead of the scan result above, and everything USB downstream of it is then absent rather than wrong."
     line: "PCIe timeout"
@@ -230,7 +230,7 @@ milestones:
     line: "Watchdog stopped"
 
   - why: "The goal: the VPU hands the board over to the ARM, with the same split of a 1 GB board's memory the reference reports (a Raspberry Pi 4B d03115's start4 log)."
-    line: "arm_loader: Starting ARM with 948MB"
+    line: "arm_loader: Starting ARM with 947MB"
 
   - why: >-
       Before releasing the ARM, `arm_loader` patches the identity properties into

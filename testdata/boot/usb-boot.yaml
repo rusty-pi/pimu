@@ -8,10 +8,6 @@
 # itself — through DMA4 transfers into the PCIe window, started by dmalib's
 # completion interrupt.
 #
-# For this boot the bootloader places start4 1 MiB below its link address
-# (`Starting start4.elf @ 0xfeb00200`), which is why the ARM gets 947 MB rather
-# than 948.
-#
 # Re-record the golden and the retired counts with:
 #   pimu boot --scenario testdata/boot/usb-boot.yaml --record
 
@@ -49,7 +45,7 @@ milestones:
   - why: "start4 runs, and knows it came from USB."
     line: ["MESS:", "USB boot mode 2"]
 
-  - why: "The bootloader relocated start4 1 MiB down for USB boot; core 1 has to follow it there, or the main thread's first inter-core wait never ends."
+  - why: "The bootloader relocates start4 1 MiB down (since the 2026-10-30 release, on every boot medium); core 1 has to follow it there, or the main thread's first inter-core wait never ends."
     line: "Starting start4.elf @ 0xfeb00200"
 
   - why: "start4 reads the kernel over USB itself: DMA4 has to start on the CB write to an active channel and raise its completion on source 89, where dmalib registered dma_interrupt for channel 11."

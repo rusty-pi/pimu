@@ -97,7 +97,7 @@ test.describe("EEPROM", () => {
     await row.locator("select").selectOption("0");
     await expect(row).not.toHaveClass(/changed/);
     expect((await app.localState()).bootconf).toEqual({});
-    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official 2026-08-04");
+    await expect(app.page.locator('[data-sub="eeprom"]')).toHaveText("official 2026-10-30");
   });
 
   test("a changed setting says so, counts on the chip, and resets", async ({ app }) => {

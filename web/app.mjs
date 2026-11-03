@@ -19,7 +19,7 @@ const OFFICIAL_FILES = [
 ].map((path) => ({ path, url: FIRMWARE + path }));
 const HTTP_BOOT_SETTINGS = { HTTP_HOST: "netboot.test", HTTP_PORT: "80" };
 const OFFICIAL_EEPROM =
-  "https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-08-04.bin";
+  "https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-10-30.bin";
 
 const LOG_CHANNELS = [
   ["io", "Blocks read and written, EEPROM bytes, OTP rows, and what the network peer did"],
@@ -1119,7 +1119,7 @@ const PANELS = {
     const form = drawerFrame("Boot EEPROM", body);
     body.append(...clean([
       h("div", { class: "field" }, h("span", { class: "label" }, "Bootloader image"),
-        radio("eeprom-kind", "official", eeprom.kind === "official", "Official pieeprom-2026-08-04", "From raspberrypi/rpi-eeprom on GitHub", () => { eeprom.kind = "official"; eeprom.url = OFFICIAL_EEPROM; changed(); renderDrawer(); }),
+        radio("eeprom-kind", "official", eeprom.kind === "official", "Official pieeprom-2026-10-30", "From raspberrypi/rpi-eeprom on GitHub", () => { eeprom.kind = "official"; eeprom.url = OFFICIAL_EEPROM; changed(); renderDrawer(); }),
         radio("eeprom-kind", "url", eeprom.kind === "url", "An image from a URL", null, () => { eeprom.kind = "url"; changed(); renderDrawer(); }),
         radio("eeprom-kind", "file", eeprom.kind === "file", "An image from my computer", "A pieeprom.bin, signed or not", () => { eeprom.kind = "file"; changed(); renderDrawer(); })),
       eeprom.kind === "url" ? h("div", { class: "field" }, h("input", { type: "url", value: eeprom.url, "aria-label": "EEPROM image URL", onchange: (e) => { eeprom.url = e.target.value.trim(); changed(); renderDrawer(); } })) : null,
@@ -1674,7 +1674,7 @@ function refreshBoard() {
     none: ["empty", false],
   }[s.sd.mode];
   const edits = Object.keys(s.bootconf).length + (s.bootOrder ? 1 : 0) + s.extraBootconf.split("\n").filter((l) => l.trim()).length;
-  const eepromName = s.eeprom.kind === "official" ? "official 2026-08-04" : s.eeprom.kind === "file" ? (files.eeprom?.name ?? "no file") : tail(s.eeprom.url);
+  const eepromName = s.eeprom.kind === "official" ? "official 2026-10-30" : s.eeprom.kind === "file" ? (files.eeprom?.name ?? "no file") : tail(s.eeprom.url);
   const parts = {
     sd: { sub: sd[0], filled: sd[1] },
     eeprom: { sub: edits ? `${s.eeprom.kind === "official" ? "official" : short(eepromName, 8)} · ${edits} edited` : eepromName, filled: true },

@@ -1,7 +1,7 @@
 
-[t] RPi: BOOTSYS release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
-[t] MFG_VER: 1
-[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev c03112 stc [n]
+[t] RPi: BOOTSYS release VERSION:13c4219f DATE: 2026/10/30 TIME: 23:20:35
+[t] MFG_VER: 2
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1793402435 serial 1aa2bb31 boardrev c03112 stc [n]
 [t] PM_RSTS 00000020
 [t] POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 0
 [t] EEPROM ID 0xef3013
@@ -9,8 +9,8 @@
 [t] part 00000000 reset_info 00000000
 [t] uSD voltage 3.3V
 [t] init_sdram_1350
-[t] Initialising SDRAM rank 1 total-size: 32Gbit part: 0 (0x05 0x00) odt: 0
-[t] memsys_init: 0 32Gbit MCB 0x80015ff0: 11696
+[t] Initialising SDRAM rank 1 total-size: 32Gbit part: 0 (0x05 0x05) odt: 0
+[t] memsys_init: 0 32Gbit MCB 0x80015ff0: 12384
 [t] DDR 3200 Mbps dual-rank:0 byte-mode:0 size-gbit:32 part-config:0 odt:0
 [t] SD_SB 11003130
 [t] OTP boardrev c03112 bootrom 8b0 8b0
@@ -18,9 +18,9 @@
 [t] VC-JTAG unlocked
 
 
-[t] RPi: BOOTLOADER release VERSION:0a7ef05f DATE: 2026/08/04 TIME: 12:38:13
-[t] MFG_VER: 1
-[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1785847093 serial 1aa2bb31 boardrev c03112 stc [n]
+[t] RPi: BOOTLOADER release VERSION:13c4219f DATE: 2026/10/30 TIME: 23:20:35
+[t] MFG_VER: 2
+[t] BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1793402435 serial 1aa2bb31 boardrev c03112 stc [n]
 [t] EEPROM ID 0xef3013
 [t] SFDP None
 [t] PCI0 init
@@ -30,7 +30,7 @@
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
 [t] USBSTS 1
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
-[t] xHC0 ports 5 slots 32 intrs 4
+[t] xHC0 ports 5 slots 31 intrs 4
 [t] Reset USB port-power 1000 ms
 [t] xhci_set_port_power 1 0
 [t] xhci_set_port_power 2 0
@@ -49,7 +49,7 @@
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
 [t] USBSTS 1
 [t] xHC0 ver: 256 HCS: 05000420 fc000031 00e70004 HCC: 002841eb
-[t] xHC0 ports 5 slots 32 intrs 4
+[t] xHC0 ports 5 slots 31 intrs 4
 [t] SD_OC: 0
 [t] Boot mode: SD (01) order f4
 [t] USB2[1] 400202e1 connected
@@ -153,7 +153,7 @@ MESS:[t]:0: 'console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=
 MESS:[t]:0: brfs: File read: 97 bytes
 MESS:[t]:0: brfs: File read: /mfs/sd/kernel8.img
 MESS:[t]:0: Loaded 'kernel8.img' to 0x200000 size 0x4c
-MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1c1)
+MESS:[t]:0: Device tree loaded to 0x2eff1e00 (size 0xe1c5)
 MESS:[t]:0: uart: Set PL011 baud rate to 103448.300000 Hz
 MESS:[t]:0: uart: Baud rate change done...
 MESS:[t]:0: uart: Baud rate change done...

@@ -12,7 +12,7 @@ import { test as base, expect } from "@playwright/test";
 export { expect };
 
 export const EEPROM_URL =
-  "https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-08-04.bin";
+  "https://raw.githubusercontent.com/raspberrypi/rpi-eeprom/master/firmware-2711/latest/pieeprom-2026-10-30.bin";
 
 // What a pieeprom.bin's bootconf.txt says, as the page asks the worker for it.
 export const BOOTCONF = [

@@ -31,7 +31,7 @@ boot:
 # idled on for a minute of modelled time until nothing had printed for long
 # enough. The whole line: the console streams, so a shorter match stops
 # mid-line.
-  until: "arm_loader: Starting ARM with 948MB"
+  until: "arm_loader: Starting ARM with 947MB"
   wall_secs: 200
   max_skipped: 0
 
@@ -52,7 +52,7 @@ milestones:
     line: "[ramdisk] recovery.elf not found"
 
   - why: "The goal: the VPU hands the board over to the ARM, with no SD card in the machine."
-    line: "arm_loader: Starting ARM with 948MB"
+    line: "arm_loader: Starting ARM with 947MB"
 
   - why: "The identity is the same however the board booted: same fuses, same pinned serial."
     line: ["/chosen/rpi-serial64 ", "\"fa1e00231aa2bb31\""]
