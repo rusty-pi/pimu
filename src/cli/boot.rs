@@ -888,6 +888,9 @@ impl BootOpts {
     /// The options, or `None` for `--help`. `dir` is where [`ZeroConfig`] looks.
     fn parse(args: &[String], dir: &Path) -> Result<Option<Self>> {
         let mut path: Option<PathBuf> = None;
+        // A directory argument, kept apart from the file to boot, so that
+        // `--eeprom <file>` beside it, before or after, takes neither's place.
+        let mut from_arg: Option<PathBuf> = None;
         let mut url: Option<String> = None;
         let mut entry: Option<u32> = None;
         let mut usb_mb: Option<u64> = None;
@@ -1287,7 +1290,16 @@ impl BootOpts {
                 }
                 "-h" | "--help" => return Ok(None),
                 s if pimu::remote::is_url(s) => url = Some(s.to_string()),
-                s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
+                s if !s.starts_with('-') && Path::new(s).is_dir() => {
+                    if let Some(first) = from_arg.replace(PathBuf::from(s)) {
+                        bail!("two directories to boot: '{}' and '{s}'", first.display());
+                    }
+                }
+                s if !s.starts_with('-') => {
+                    if let Some(first) = path.replace(PathBuf::from(s)) {
+                        bail!("two files to boot: '{}' and '{s}'", first.display());
+                    }
+                }
                 s => bail!("unexpected argument '{s}' (try boot --help)"),
             }
         }
@@ -1310,7 +1322,7 @@ impl BootOpts {
         }
         // A directory to boot: read from there, as `-C` does, and it is itself
         // the card when it holds a boot partition's files.
-        let from = match path.take_if(|p| p.is_dir()) {
+        let from = match from_arg.or_else(|| path.take_if(|p| p.is_dir())) {
             Some(p) => p,
             None => dir.to_path_buf(),
         };
@@ -3191,6 +3203,31 @@ mod tests {
         assert_eq!(o.sd, Some(Medium::Files(dir.clone())));
         assert!(o.eeprom);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_directory_argument_beside_eeprom_is_still_the_card() {
+        let dir = zero_dir("arg-dir-eeprom");
+        put(&dir, "config.txt", "");
+        let card = dir.to_str().unwrap();
+        for a in [
+            [card, "--eeprom", "pieeprom.bin"],
+            ["--eeprom", "pieeprom.bin", card],
+        ] {
+            let o = BootOpts::parse(&args(&a), Path::new("")).unwrap().unwrap();
+            assert_eq!(o.path, PathBuf::from("pieeprom.bin"), "{a:?}");
+            assert_eq!(o.sd, Some(Medium::Files(dir.clone())), "{a:?}");
+            assert!(o.eeprom);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn two_files_to_boot_are_an_error() {
+        let err = BootOpts::parse(&args(&["a.bin", "--eeprom", "b.bin"]), Path::new(""))
+            .err()
+            .expect("two files took");
+        assert!(err.to_string().contains("two files to boot"), "{err}");
     }
 
     const BOOT_URL: &str =
