@@ -7,20 +7,37 @@ use anyhow::{bail, Context, Result};
 
 use pimu::harness::{self, GoldenOutcome};
 
-/// `run <scenario.yaml>`: one in-process scenario against its golden transcript.
-pub fn cmd_run(args: &[String]) -> Result<ExitCode> {
-    let mut path: Option<PathBuf> = None;
-    let mut update = false;
-    let mut verbose = false;
-    for a in args {
-        match a.as_str() {
-            "--update" => update = true,
-            "-v" | "--verbose" => verbose = true,
-            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-            s => bail!("unexpected argument '{s}'"),
-        }
-    }
-    let path = path.context("run: missing <scenario.yaml>")?;
+/// Run one scenario and check it against its golden transcript.
+#[derive(clap::Args)]
+pub struct RunArgs {
+    #[arg(value_name = "scenario.yaml")]
+    path: PathBuf,
+    #[command(flatten)]
+    golden: GoldenArgs,
+}
+
+/// Run every *.yaml scenario in <dir>.
+#[derive(clap::Args)]
+pub struct RunAllArgs {
+    #[arg(default_value = "testdata/scenarios")]
+    dir: PathBuf,
+    #[command(flatten)]
+    golden: GoldenArgs,
+}
+
+#[derive(clap::Args)]
+struct GoldenArgs {
+    /// Rewrite golden files instead of failing on mismatch.
+    #[arg(long)]
+    update: bool,
+    /// Print the full report and transcript.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+pub fn cmd_run(args: RunArgs) -> Result<ExitCode> {
+    let RunArgs { path, golden } = args;
+    let GoldenArgs { update, verbose } = golden;
     let scn = harness::Scenario::load(&path)?;
     let outcome = run_one(&scn, update, verbose)?;
     Ok(if outcome {
@@ -30,19 +47,9 @@ pub fn cmd_run(args: &[String]) -> Result<ExitCode> {
     })
 }
 
-/// `run-all [<dir>]`: every scenario in `<dir>`.
-pub fn cmd_run_all(args: &[String]) -> Result<ExitCode> {
-    let mut dir = PathBuf::from("testdata/scenarios");
-    let mut update = false;
-    let mut verbose = false;
-    for a in args {
-        match a.as_str() {
-            "--update" => update = true,
-            "-v" | "--verbose" => verbose = true,
-            s if !s.starts_with('-') => dir = PathBuf::from(s),
-            s => bail!("unexpected argument '{s}'"),
-        }
-    }
+pub fn cmd_run_all(args: RunAllArgs) -> Result<ExitCode> {
+    let RunAllArgs { dir, golden } = args;
+    let GoldenArgs { update, verbose } = golden;
 
     let files = harness::discover(&dir)
         .with_context(|| format!("discovering scenarios in {}", dir.display()))?;

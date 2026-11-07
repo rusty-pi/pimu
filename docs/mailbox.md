@@ -12,7 +12,7 @@ interface. A kernel that parks the ARM never asks, so `--mbox-property` stands
 in for it:
 
 ```bash
-boot firmware/pieeprom.bin --eeprom --sd firmware/sd-halt.img \
+boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img \
   --mbox-property 0x00000001,0x00030090
 ```
 
@@ -56,7 +56,7 @@ exchanges against one booted firmware — which is the only way to read
 *previous* request:
 
 ```bash
-boot firmware/pieeprom.bin --eeprom --sd firmware/sd-halt.img \
+boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img \
   --mbox-property 0x00030090 --mbox-property 0x0003008e
 ```
 
@@ -66,7 +66,7 @@ so it is exactly what cannot be trusted when the sizes are in question. Every
 rejected reply is logged the same way on the `mbox` channel, whoever asked:
 
 ```
-boot firmware/pieeprom.bin --eeprom --sd firmware/sd-uefi.img --log mbox
+boot --eeprom firmware/pieeprom.bin --sd firmware/sd-uefi.img --log mbox
   mbox: property reply error at 0xf8a76000: 00000022 80000001 00010003 0000000a ...
 ```
 
@@ -85,7 +85,7 @@ offset, or stale bytes past the total the client only zeroed up to. `--mbox-raw`
 posts an exact byte image instead, so such a buffer can be replayed:
 
 ```bash
-boot firmware/pieeprom.bin --eeprom --sd firmware/sd-halt.img \
+boot --eeprom firmware/pieeprom.bin --sd firmware/sd-halt.img \
   --mbox-raw 2200000000000000030001000a000000000000000000000000000000000000000000
 ```
 

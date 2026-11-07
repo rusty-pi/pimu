@@ -3,33 +3,45 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 use pimu::vpu::decode::decode;
 use pimu::vpu::length::insn_len_bytes;
 
 use crate::parse_u32;
 
-pub fn cmd_disasm(args: &[String]) -> Result<ExitCode> {
-    let mut path: Option<PathBuf> = None;
-    let mut base: u32 = 0;
-    let mut count: usize = 64;
-    let mut vaddr: Option<u32> = None;
-    let mut lengths_only = false;
-    let mut eeprom = false;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--base" => base = parse_u32(it.next().context("--base needs a value")?)?,
-            "--count" => count = it.next().context("--count needs a value")?.parse()?,
-            "--vaddr" => vaddr = Some(parse_u32(it.next().context("--vaddr needs a value")?)?),
-            "--lengths" => lengths_only = true,
-            "--eeprom" => eeprom = true,
-            s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-            s => bail!("unexpected argument '{s}'"),
-        }
-    }
-    let path = path.context("disasm: missing <file>")?;
+/// Disassemble a flat binary, an ELF segment or an EEPROM image's bootcode
+/// with the (partial) VPU decoder.
+#[derive(clap::Args)]
+pub struct DisasmArgs {
+    /// The file to read.
+    path: PathBuf,
+    /// Where offset 0 of a flat binary is.
+    #[arg(long, default_value = "0", value_parser = parse_u32)]
+    base: u32,
+    /// How many instructions to decode.
+    #[arg(long, default_value_t = 64)]
+    count: usize,
+    /// Where to start: by default the ELF's entry, the bootcode's or --base.
+    #[arg(long, value_parser = parse_u32)]
+    vaddr: Option<u32>,
+    /// Print each instruction's address, length and mnemonic only.
+    #[arg(long = "lengths")]
+    lengths_only: bool,
+    /// The file is an EEPROM image: decode its bootcode.
+    #[arg(long)]
+    eeprom: bool,
+}
+
+pub fn cmd_disasm(args: DisasmArgs) -> Result<ExitCode> {
+    let DisasmArgs {
+        path,
+        base,
+        count,
+        vaddr,
+        lengths_only,
+        eeprom,
+    } = args;
     let raw = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
 
     // ELF: the segment holding `vaddr` (or the entry). Flat: offset 0 is at `--base`.

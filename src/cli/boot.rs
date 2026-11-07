@@ -7,11 +7,11 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
+use clap::{ArgMatches, FromArgMatches};
 
 use pimu::boot::{boot_outcome, locate_fdt, CardEdits, Carry, FlashEdits, USB_ROOT_PORT};
 use pimu::emulator::{Emulator, RunLimits, RunReport};
 use pimu::firmware::Payload;
-use pimu::harness;
 use pimu::log::{Log, Spec};
 use pimu::machine::Machine;
 use pimu::mem::Region;
@@ -21,473 +21,9 @@ use pimu::vpu::decode::decode;
 use pimu::vpu::length::insn_len_bytes;
 use pimu::vpu::UnimplPolicy;
 
-use crate::mbox::{mbox_property_exchange, MboxRequest, MboxTag};
+use crate::boot_args::{BootArgs, HostNet};
+use crate::mbox::{mbox_property_exchange, MboxRequest};
 use crate::otp::{Format, OtpFile};
-use crate::{parse_hex_image, parse_u32};
-
-/// `boot --help`. A test holds this and `BootOpts::parse` to the same option list.
-const HELP: &str = "\
-pimu boot — boot the machine from an EEPROM image, as a Pi 4 does, or
-run a VPU ELF
-
-USAGE:
-    pimu boot
-    pimu boot --eeprom <pieeprom.bin> [<options>]
-    pimu boot <file.elf> [<options>]
-    pimu boot <dir> [<options>]
-    pimu boot <url> [<options>]
-    pimu boot --scenario <file.yaml>|<dir> [--record|--plan|--from-log <log>] [<options>]
-
-    `boot <file> --eeprom` is the same as `boot --eeprom <file>`, and with no
-    command the options are `boot`'s: `pimu --eeprom <file> ...`.
-    `--config <file>` and `--option=value` work as for every command (see
-    `pimu --help`).
-
-    The run prints the serial console (not with -q), what was asked for by
-    name (`--dump`, `--print-fdt`, `--mbox-property`, …) and one
-    `result: ok|FAILED — <why>` line; the exit status is 1 on failure.
-    Besides the limits below, a run ends at an instruction the decoder does
-    not implement, and once the firmware has printed nothing for a minute of
-    model time.
-
-ZERO CONFIG:
-    An option left out takes the file of that name in the working directory,
-    when there is one, so a directory holding these boots with a bare
-    `pimu boot` — and `pimu boot <dir>` reads them from <dir> instead,
-    as `pimu -C <dir> boot` does:
-
-    A directory that holds a boot partition's files instead — `start4.elf`,
-    `config.txt` — is the card itself: `boot` builds the FAT32 volume around
-    them (--sd-dir). A firmware checkout carries no EEPROM bootloader, so
-    give one with --eeprom (a `pieeprom.bin`) or keep it beside the files.
-
-OVER HTTP:
-    Wherever a file or a directory is named — the argument above, every
-    medium, --eeprom and the other file options — an `http://` or `https://`
-    URL does as well, so nothing has to be cloned or mounted first. A URL
-    that ends in `/` is a directory, as it is in a browser, and anything
-    else is a file:
-
-        pimu boot --eeprom pieeprom.bin https://raw.githubusercontent.com/raspberrypi/firmware/refs/heads/master/boot/
-        pimu boot --eeprom https://example.org/pieeprom.bin --sd https://example.org/sd.img
-        pimu boot --eeprom pieeprom.bin --tftp https://example.org/tftp/
-
-    A directory is listed first, since the FAT32 volume is built out of every
-    name and length in it: a GitHub URL through the API, any other server
-    has to index the directory itself (one HEAD per file). Each file is then
-    fetched when the guest first reads a block of it, and a disk image is
-    read in 1 MiB `Range` requests — an image is never downloaded whole, and
-    a server that answers no `Range` request has its image fetched once
-    instead. What is fetched is kept in `$XDG_CACHE_HOME/pimu/remote`.
-
-    An image compressed with `xz` is read in place, block by block through
-    the stream's own index, on the host as much as over HTTP — so a
-    distribution image boots as it is published, neither unpacked nor
-    downloaded whole (`xz` has to be installed, and a stream of one block
-    has no random access in it):
-
-        pimu boot --eeprom pieeprom.bin --sd https://cdimage.ubuntu.com/releases/24.04.3/release/ubuntu-24.04.3-preinstalled-server-arm64+raspi.img.xz
-
-        pieeprom.bin  --eeprom            otp.json      --otp json:<file>
-        sd.img        --sd                otp.bin       --otp binary:<file>
-        usb.img       --usb               bootconf.txt  --bootconf, a line each
-        otg.img       --otg               pubkey.bin    --eeprom-pubkey
-        tftp/         --tftp
-        http/         --http
-
-    An option that rules another one out keeps its file out too: --emmc leaves
-    sd.img alone, --net leaves tftp/ and http/. otp.json and otp.bin together say
-    nothing about which to read, so that asks for an explicit --otp. The run
-    names on stderr what it picked up.
-
-MACHINE:
-    --eeprom <pieeprom.bin>
-              Put this image on the SPI flash and boot from it, through the
-              modelled boot ROM. Without it the file is a VPU ELF, loaded and
-              run from its entry point.
-    --stepping b0|c0
-              The BCM2711 silicon, C0 by default.
-    --board-rev <hex>
-              The OTP revision code; by default a board that stepping shipped
-              on. Its memory field is the board's memory: the RAM behind the
-              bus, and the LPDDR4 parts the DRAM controller reports, so the
-              firmware trains and publishes that size. `total_mem` in
-              `config.txt` cuts it down from there.
-    --otp json:<file> | binary:<file>
-              The OTP fuses, kept across runs: read before the boot when
-              <file> exists, written back after the run when the firmware
-              programmed a row, created from the model's own fuses when it
-              does not exist. Its rows go over the model's own, and a row it
-              says nothing about keeps the value the model gives it — an
-              unprogrammed fuse reads 0 and no format spells it out.
-              json: row -> value, one a line; binary: row n
-              at byte 4n, little-endian. A file with a real board's fuses
-              holds its secrets: keep it out of the repository.
-    --otp-row <ROW>=<VALUE>
-              Program one fuse before the boot, on top of the model's own
-              rows and anything --otp read. The model is a board out of the
-              factory, so a row an owner would have fused - the device
-              private key in 56-63, say - is blank until this sets it.
-    --maskrom <rom.bin>
-              Execute a real VPU maskROM dump from its reset vector,
-              0x60000000, instead of the modelled boot ROM stage.
-              Experimental. The dump stays a local file: never commit it.
-
-MEDIA AND NETWORK:
-    --sd <img>|<dir>|<url>
-              An SD card: a disk image (`.xz` and all), or a directory whose files the boot
-              partition holds — the MBR, the FAT32 volume and its directories
-              are built around them, and the files are read as the firmware
-              asks for them. What `git clone
-              https://github.com/raspberrypi/firmware` leaves in `boot/` is
-              such a directory. Read on demand either way; writes stay in
-              memory and outlive a firmware reset. Mutually exclusive with
-              --emmc, the same host.
-              `partitions:<file>` builds a GPT disk out of a YAML file of
-              partitions (`type`, `format`, `files`) instead; the paths in it
-              are relative to the file (docs/running.md). --usb, --otg and
-              --emmc take the same.
-    --check-coherency
-              Report every read of memory the VPU wrote through a cached alias
-              (`0x0`, `0x4000_0000`, `0x8000_0000`) and did not flush, and
-              every cached read of memory an ARM-side master wrote behind
-              those caches: on real silicon both see the wrong bytes. Goes to
-              the `coherency` log channel.
-    --jitter <seed>
-              Stretch the intervals the model would otherwise take exactly —
-              a card block, a SuperSpeed link's training, an I2C or DDC
-              transfer — by a factor drawn from this seed, so the run is
-              reproducible but not even. Nothing is ever shortened. Compare
-              stock and ours on the same seed: what only ours fails is ours.
-              Goes to the `jitter` log channel.
-    --faults <one-in>
-              With --jitter, let about one chance in this many go wrong the
-              way a board does: a frame that never arrives, and nothing else
-              yet. Off without it, when jitter only costs time.
-    --check-alignment
-              Report every scalar VPU access that is not naturally aligned.
-              The model reads memory by offset; the core cannot, so such an
-              access reads other bytes on silicon. Goes to the `alignment`
-              log channel.
-    --hat <eep>
-              A HAT on the 40-pin header, with this ID EEPROM image at 0x50 on
-              I2C0 (`eepmake` output). The firmware reads it where it probes
-              the header, and applies the device-tree overlay in it.
-    --config-txt <LINE>
-              Add this line to the card's `config.txt`, under an `[all]`
-              header so a conditional section the file ends in does not
-              swallow it. Repeatable. A card without a `config.txt` — what
-              `raspberrypi/firmware`'s `boot/` is — gets one holding these
-              lines, so `--config-txt enable_uart=1` is what makes such a
-              card print anything at all, and `uart_2ndstage=1` what adds
-              start4.elf's own log. Only for a medium given as files; a disk
-              image is opaque.
-    --cmdline <text>
-              The card's `cmdline.txt` is <text>, whatever it held: the
-              firmware reads the whole file as one kernel command line. Same
-              cards as --config-txt.
-    --emmc <img>|<dir>|<url>
-              An e-MMC part soldered to the SD host, as a Compute Module has
-              in place of a card slot: an image or a directory of files, as
-              --sd takes. Answers CMD1 and the EXT_CSD instead of an SD
-              card's ACMD41 and SCR. Mutually exclusive with --sd.
-    --usb <img>|<dir>|<url>
-              A USB mass-storage stick in blue socket A (xHCI root port 2,
-              SuperSpeed): an image or a directory of files, as --sd takes.
-              Read on demand; writes stay in memory and outlive a firmware
-              reset.
-    --otg <img>|<dir>|<url>
-              The same stick in the USB-C socket
-              instead, on the BCM2711's own xHCI. --boot-order 0x5
-              (BCM-USB-MSD) boots from it. Linux is given that controller when
-              the firmware booted from it, and otherwise only when the card's
-              config.txt says otg_mode=1 (OTG=1 scripts/make-sd.sh).
-    --otg-dock
-              Put the --otg stick behind a USB-C dock: two hubs, an Ethernet
-              adapter and an empty card reader besides the stick, five
-              devices that each take an xHCI slot.
-    --scenario <file.yaml>|<dir>
-              Boot what a scenario file describes and check the run against
-              it: the milestones it names, its golden console transcript and
-              the instruction counts it pins. The files are read relative to
-              the scenario. A directory runs every `*.yaml` in it, one after
-              another. Exits 0 on a pass and 1 on a failure; options after it
-              go to the boot and override the file's (`--max-wall`, ...).
-              The combined output goes to `boot-<name>.log` and the console
-              beside it as `<log>.console`. See docs/running.md.
-    --record  With --scenario: rewrite the golden transcript and the retired
-              counts from this run, once it has passed its milestones.
-    --plan    With --scenario: print the arguments of the boot instead of
-              running it, one a line, and name any file it needs that is
-              missing.
-    --from-log <log>
-              With --scenario: check the log of an earlier run, and the
-              `<log>.console` beside it, without booting.
-    --output <log>
-              With --scenario: where the combined output goes. For a
-              directory of scenarios, the directory the logs go in.
-    --usb-uas
-              Make the --usb stick a USB Attached SCSI one: Bulk-Only on
-              interface alternate setting 0 and UAS (command, status, data-in
-              and data-out pipes, streams) on setting 1, as UAS sticks have
-              them. A host that does not select setting 1 sees a plain
-              Bulk-Only stick.
-    --usb-uas-refuse
-              As --usb-uas, but the stick stalls the request that selects
-              setting 1, so a host has to fall back to Bulk-Only.
-    --usb-model generic|rpi-flash-drive
-              Which stick --usb is. `generic` (the default) is the Samsung
-              Bulk-Only stick, or with --usb-uas an invented UAS one.
-              `rpi-flash-drive` is the official Raspberry Pi USB Flash Drive
-              (2e8a:0030) as measured on a Raspberry Pi 4B d03115: UAS with
-              Bulk-Only as the other setting, and it wedges, see --usb-wedge.
-    --usb-wedge host-silent:<seconds>|off
-              Make the --usb stick stop taking an address (Address Device
-              fails with USB Transaction Error) when the xHCI controller first
-              runs more than <seconds> after a warm reset the stick survived
-              (the first power-on never wedges it), as a
-              Raspberry Pi USB flash drive does behind the VL805 of a
-              Raspberry Pi 4B d03115 when nothing talks to it for about 13.4 s
-              after a warm reset. `rpi-flash-drive` does it by default, with the
-              limit docs/usb.md calibrates (11.25 s of model time, not board
-              time); `off` turns it off. The generic stick never does unless
-              asked.
-    --usb-mb <n>
-              A stick given by --usb or --otg is <n> MiB, with the image at its
-              start, as on a Pi whose first boot uses the rest.
-    --display
-              Plug a monitor into HDMI0: its `HOTPLUG` reports connected and a
-              built-in EDID answers on the DDC bus. Off by default, as the
-              reference board has no monitor on either connector.
-    --display-edid <file>
-              Serve this EDID blob (128 or 256 bytes) instead of the built-in
-              one. Implies --display.
-    --tftp <dir>|<url>
-              Plug the Ethernet cable into the built-in network peer: DHCP,
-              DNS, and what is in <dir> over TFTP — the files `start4.elf`
-              and its own network driver fetch. A URL serves what is under
-              it instead, each name fetched the first time the guest asks
-              for it.
-    --http <dir>|<url>
-              The same peer, serving <dir> over HTTP: `boot.img` and
-              `boot.sig` under `net_install/` (`HTTP_PATH`). It may be the
-              directory --tftp has. BOOT_ORDER picks the protocol.
-    --net passt[:<socket>]
-              Plug the Ethernet cable into the host's network instead of the
-              built-in peer, through passt: `passt` starts one (from PATH) on a
-              socket pair, `passt:<socket>` connects to one already listening
-              (`passt -f -s <socket>`), or to anything else speaking QEMU's
-              `-netdev stream` framing on that UNIX socket. Runs on the host's
-              clock, so not deterministic.
-
-EEPROM IMAGE (edits made before the first boot, and again after every
-self-update, which brings back the image's own):
-    --boot-order <hex>
-              Add a BOOT_ORDER=<hex> line to bootconf.txt. Without one the
-              bootloader uses its built-in 0xf4: SD card, then restart, and
-              never USB — except with --usb, which defaults to 0xf41: SD
-              card, then the stick.
-    --bootconf <KEY=VALUE>
-              Add any other line to bootconf.txt, e.g. HTTP_HOST=<host> for
-              HTTP boot. Repeatable; a later line wins over an earlier one with
-              the same key.
-    --tryboot
-              Ask for a tryboot before the first boot, as `reboot '0 tryboot'`
-              does from Linux: the bootloader reads tryboot.txt in place of
-              config.txt, and a start_file= in it names the firmware. The
-              request is one-shot, so a reset inside the run boots normally.
-    --orderly-reboot
-              Once the run reaches --until, play what Linux's `reboot` does
-              into the mailbox (an mmc rescan's three SET_GPIO_STATE 134
-              pulses, NOTIFY_REBOOT, SET_GPIO_STATE 134 <- 0 and 130 <- 1,
-              NOTIFY_REBOOT) and ask the PM watchdog for a reset, then
-              boot again. The GPIO expander is off the SoC, so it keeps what
-              the firmware left in it across the reset, and a card whose
-              SD_PWR_ON stays low answers nothing. A reset that leaves it
-              low prints `expander: SD_PWR_ON is driven low across the reset`. Needs --until.
-    --skip-signed-boot
-              Set SIGNED_BOOT=0 in bootconf.txt: skip the bootloader's
-              SHA-256 + RSA-2048 verify of boot.img, about half a billion
-              interpreted instructions.
-    --eeprom-pubkey <pubkey.bin>
-              Put this RSA-2048 public key (n then e, 264 bytes) in the
-              pubkey.bin slot, as `rpi-eeprom-config --pubkey` does. Signed
-              images, an HTTP-booted boot.img among them, are verified against
-              it.
-
-RUNNING:
-    --snapshot-save <file>
-              Run until the firmware releases the ARM, save the machine there
-              and stop. The VPU's boot is most of a Linux boot's time; a run
-              about the ARM side can skip it with --snapshot-load.
-    --snapshot-load <file>
-              Go on from a --snapshot-save file, with the same command line it
-              was saved with otherwise. USB devices start as plugged in, not as
-              the snapshot left them.
-    --max-wall <secs>
-              Stop after this much wall-clock time: 140 s by default, no limit
-              with --stdin.
-    --max-steps <n>
-              Stop after <n> instructions. No cap by default: this is for
-              pinning a run to an exact count (bisecting, probes).
-    --parallel
-              Run each ARM core on a host thread of its own instead of taking
-              turns in one. For a person who wants a Linux shell sooner on a
-              host with cores to spare: a run is no longer exactly repeatable
-              (how two cores' stores interleave depends on the host), the
-              busy-wait shortcuts are off, and nothing here has been compared
-              against the golden transcripts. The default stays the repeatable
-              one.
-    --speed <factor|max>
-              How fast the guest may run against real time: 1 by default, so
-              the model sleeps whenever its clock is ahead of the host's and
-              an idle guest leaves the host idle too. A factor above 1 allows
-              that multiple of real time, and `max` runs as fast as the host
-              manages, which is what CI wants. --max-wall does not count the
-              time a paced run spends asleep.
-    --until <text>
-              End the run once the console prints <text> (e.g. the shell
-              prompt of a Linux boot), after the last --send-after went in.
-    --send-after <prompt> <text>
-              Type <text> into the serial console (PL011) once it prints
-              <prompt>. Repeatable; each prompt is looked for only in what the
-              console printed after the previous send. Both take \\n, \\r, \\t,
-              \\\\ and \\xHH escapes. Deterministic: keyed to the transcript.
-    --magic-packet-after <text>
-              Once the console prints <text>, have the built-in network peer
-              send the board a Wake-on-LAN magic packet: a broadcast frame of
-              six 0xFF bytes and 16 copies of the MAC address GENET holds at
-              that moment. Sent once in the whole run, however many resets it
-              takes, so the boot that follows a wake sees none. Plugs the peer
-              in even without --tftp or --http; --net has no such peer.
-    --stdin   Interactive session: the host's stdin is the serial console's
-              input, and no wall-clock or silence limit ends the run. On a
-              terminal, keys go to the guest raw (Ctrl-C included); Ctrl-A x
-              quits, Ctrl-A Ctrl-A sends a Ctrl-A.
-    --skip-unimpl
-              Step over an instruction the decoder does not implement instead
-              of stopping the run: reconnaissance on firmware the decoder is
-              new to.
-
-OUTPUT:
-    -v, --verbose
-              Print the full run report as well — registers, the ARM cores,
-              the property replies, the EEPROM's boot configuration, the
-              device tree's `/chosen`.
-    -q, --quiet
-              Leave the serial console out: not streamed, not printed after the
-              run, not in the -v report. --console-log still gets it, and
-              --until and --send-after still see it. For a run whose log
-              channels are the point, e.g. with --log jsonl:io.
-    --console-log <path>
-              Write the raw UART bytes of the run to <path>, with none of the
-              run report interleaved. This is what `boot --scenario` normalises into
-              the golden boot transcript.
-    --log [text:|jsonl:]<channel>[,<channel>...]
-              Say what these subsystems did, on stderr or to --log-file
-              <path>. `io` is what the machine read and wrote apart from the
-              console: SD card and USB stick block runs with the files they
-              belong to, SPI flash byte runs, OTP rows read and programmed,
-              and what the network peer did (DHCP, DNS, TFTP, HTTP). The rest are one device or
-              core each: arm-exc cmp dwc2 emmc expander gpio irqen mbox otp
-              pcie pmic spi uart xhci, and in a `diag` build derail dma ff irqtbl
-              sleep swirq tick vec. Repeatable; `jsonl:` for one JSON object
-              a line.
-              See docs/diagnostics.md.
-    --log-file <path>
-              Write the --log channels to <path> instead of stderr.
-    --dump <hex>:<len>
-              After the run, print <len> bytes of memory at <hex>, as the VPU
-              sees it. Repeatable.
-    --disasm <hex>:<count>
-              After the run, disassemble <count> VPU instructions at <hex>.
-              Repeatable.
-    --dump-eeprom <path>
-              After the run, write the SPI flash to <path>, as the firmware
-              left it. Compare it with the image a recovery run was given.
-    --dump-fdt <path>
-              After the run, write the flattened device tree `arm_loader` handed
-              to the ARM to <path>. Diff two firmware versions with
-              `fdtdump`/`dtc` to catch a bump that changes what the firmware
-              publishes.
-    --print-fdt
-              Print that whole device tree as source, every node and property,
-              not only the `/chosen` summary the `-v` run report gives.
-    --gencmd <command>
-              After the boot, open the firmware's `GCMD` service over VCHIQ and
-              send <command>, the way `vcgencmd` does, then print the answer.
-              Repeatable; every command goes over the one connection. The
-              harness brings up a slot area of its own (`src/cli/vchiq.rs`),
-              because the kernel only connects when userspace asks it to. Use
-              it with the ARM parked -- `--sd firmware/sd-halt.img`, the card
-              `--mbox-property` is used with -- for that flag's own reason.
-
-    --mbox-property <tag>[,<tag>...]
-              After the boot, post a property-interface request to the firmware
-              the way a booted Linux would (`/dev/vcio`), and print what the
-              still-running `start4.elf` answers. Tags are hex, e.g.
-              `0x00000001` (GET_FIRMWARE_REVISION) or `0x00030092`
-              (GET_CRYPTO_HMAC_SHA256). Repeatable, one request each. See
-              docs/diagnostics.md.
-    --mbox-raw <hex>
-              Post an exact byte image of a property request instead of one
-              built from tags: `--mbox-raw 2200000000000000030001000a...`. A
-              client whose `sizeof` is wrong lays its buffer out in ways
-              --mbox-property never would — an unaligned declared total, an end
-              tag at an odd offset, stale bytes past the total — and that is
-              what decides whether the firmware takes it. Repeatable, one
-              request each.
-    --dram-map
-              Report which DRAM pages are non-zero when the run ends, as
-              address runs: the RAM a snapshot of the machine would have to
-              carry.
-    --eeprom-map
-              Print the EEPROM section table `bootloader_eeprom_find_files`
-              walks, on top of the boot configuration -v decodes.
-    --stub-log
-              Print the peripheral-window offsets nothing models, which fell
-              through to the catch-all stub: one line an offset, with the read
-              and write counts and the last value.
-    --control-transfers
-              Print the VPU's last control transfers, newest first, repeats
-              collapsed: where a derailed boot came from.
-    -h, --help
-              Print this help.
-
-VPU:
-    --entry <hex>
-              Start there instead of at the ELF's entry point, or at the one
-              the boot ROM stage hands on with --eeprom.
-    --patch <hex>=<hex>
-              Store a word at an address once the image is staged, before the
-              first instruction of every boot. Repeatable.
-    --exc-vbase <hex>
-              The exception vector base to start with, for an ELF that does
-              not set its own. start4 does.
-    --smp     Start core 1 at the entry too, for payloads that run both cores
-              from the start. A firmware boot needs none of this: start4 wakes
-              core 1 itself.
-    --as-core1
-              Run the payload as core 1: bit 16 of `version` reads 1.
-
-DIAGNOSTICS (a `diag` build only: cargo build --release --features diag; the
-PIMU_* environment variables are in docs/diagnostics.md):
-    --trace   Record core 0's control transfers (branches and calls), up to
-              4000000, and print them after the run.
-    --trace-full
-              Every instruction instead, up to 200000.
-    --trace-from <hex>
-              Every instruction from when core 0 first reaches <hex>, up to
-              200000.
-    --trace-mmio
-              Log every peripheral access with the PC that made it
-              (PIMU_TRACE_MMIO=<lo>-<hi> for one address range).
-";
-
-enum HostNet {
-    Passt,
-    Socket(PathBuf),
-}
 
 struct BootOpts {
     path: PathBuf,
@@ -885,435 +421,91 @@ impl<'a> ZeroConfig<'a> {
 }
 
 impl BootOpts {
-    /// The options, or `None` for `--help`. `dir` is where [`ZeroConfig`] looks.
+    /// `boot`'s command line, without the command, or `None` for `--help`.
+    /// `dir` is where [`ZeroConfig`] looks.
+    #[cfg(test)]
     fn parse(args: &[String], dir: &Path) -> Result<Option<Self>> {
-        let mut path: Option<PathBuf> = None;
-        let mut url: Option<String> = None;
-        let mut entry: Option<u32> = None;
-        let mut usb_mb: Option<u64> = None;
-        let mut otg_dock = false;
-        let mut usb_uas = UsbUas::Off;
-        let mut usb_model = StickModel::default();
-        let mut usb_host_silent = HostSilent::default();
-        let mut display = false;
-        let mut display_edid: Option<PathBuf> = None;
-        let mut max_steps: Option<u64> = None;
-        let mut max_wall_secs: u64 = 140;
-        let mut snapshot_save: Option<PathBuf> = None;
-        let mut snapshot_load: Option<PathBuf> = None;
-        let mut speed: Option<f64> = Some(1.0);
-        let mut eeprom = false;
-        let mut trace = false;
-        let mut trace_full = false;
-        let mut trace_mmio = false;
-        let mut exc_vbase: u32 = 0;
-        let mut trace_from: u32 = 0;
-        let mut smp = false;
-        let mut parallel = false;
-        let mut as_core1 = false;
-        let mut patches: Vec<(u32, u32)> = Vec::new();
-        let mut dumps: Vec<(u32, u32)> = Vec::new();
-        let mut disasms: Vec<(u32, u32)> = Vec::new();
-        let mut sd: Option<Medium> = None;
-        let mut card_edits = CardEdits::default();
-        let mut emmc: Option<Medium> = None;
-        let mut hat_eeprom: Option<PathBuf> = None;
-        let mut check_coherency = false;
-        let mut check_alignment = false;
-        let mut jitter = None;
-        let mut faults = None;
-        let mut console_log: Option<PathBuf> = None;
-        let mut dump_fdt: Option<PathBuf> = None;
-        let mut dump_eeprom: Option<PathBuf> = None;
-        let mut print_fdt = false;
-        let mut mbox_tags: Vec<MboxRequest> = Vec::new();
-        let mut gencmds: Vec<String> = Vec::new();
-        let mut usb: Option<Medium> = None;
-        let mut otg: Option<Medium> = None;
-        let mut tftp: Option<NetRoot> = None;
-        let mut http: Option<NetRoot> = None;
-        let mut host_net: Option<HostNet> = None;
-        let mut boot_order: Option<String> = None;
-        let mut bootconf: Vec<String> = Vec::new();
-        let mut otp_rows: Vec<(u32, u32)> = Vec::new();
-        let mut eeprom_pubkey: Option<PathBuf> = None;
-        let mut maskrom_path: Option<PathBuf> = None;
-        let mut stepping: Option<Stepping> = None;
-        let mut board_rev: Option<u32> = None;
-        let mut dram_map = false;
-        let mut eeprom_map = false;
-        let mut stub_log = false;
-        let mut control_transfers = false;
-        let mut skip_signed_boot = false;
-        let mut tryboot = false;
-        let mut orderly_reboot = false;
-        let mut skip_unimpl = false;
-        let mut until: Option<String> = None;
-        let mut sends: Vec<(String, Vec<u8>)> = Vec::new();
-        let mut magic_packet_after: Option<String> = None;
-        let mut stdin = false;
-        let mut verbose = false;
-        let mut quiet = false;
-        let mut log = Spec::default();
-        let mut log_file: Option<String> = None;
-        let mut otp: Option<OtpFile> = None;
-        let mut it = args.iter().peekable();
-        while let Some(a) = it.next() {
-            match a.as_str() {
-                "--entry" => entry = Some(parse_u32(it.next().context("--entry needs a value")?)?),
-                "--eeprom" => {
-                    eeprom = true;
-                    if path.is_none() {
-                        if let Some(p) = it.next_if(|p| !p.starts_with('-')) {
-                            path = Some(file_arg("--eeprom", p)?);
-                        }
-                    }
-                }
-                "--max-steps" => {
-                    max_steps = Some(it.next().context("--max-steps needs a value")?.parse()?)
-                }
-                "--snapshot-save" => {
-                    snapshot_save = Some(it.next().context("--snapshot-save needs a file")?.into())
-                }
-                "--snapshot-load" => {
-                    snapshot_load = Some(it.next().context("--snapshot-load needs a file")?.into())
-                }
-                "--max-wall" => {
-                    max_wall_secs = it.next().context("--max-wall needs seconds")?.parse()?
-                }
-                "--speed" => {
-                    let v = it.next().context("--speed needs a factor or `max`")?;
-                    speed = if v == "max" {
-                        None
-                    } else {
-                        let f: f64 = v
-                            .parse()
-                            .ok()
-                            .filter(|f: &f64| *f > 0.0 && f.is_finite())
-                            .with_context(|| {
-                                format!("--speed {v}: not a factor above zero, nor `max`")
-                            })?;
-                        Some(f)
-                    };
-                }
-                "--trace" | "--trace-full" | "--trace-from" | "--trace-mmio" if !pimu::diag::ON => {
-                    anyhow::bail!(
-                        "{a} needs a build with the `diag` feature: cargo build --release --features diag"
-                    )
-                }
-                "--trace" => trace = true,
-                "--trace-full" => {
-                    trace = true;
-                    trace_full = true;
-                }
-                "--exc-vbase" => {
-                    exc_vbase = parse_u32(it.next().context("--exc-vbase needs a value")?)?
-                }
-                "--smp" => smp = true,
-                "--parallel" => parallel = true,
-                "--as-core1" => as_core1 = true,
-                "--trace-from" => {
-                    trace = true;
-                    trace_from = parse_u32(it.next().context("--trace-from needs a value")?)?
-                }
-                "--trace-mmio" => trace_mmio = true,
-                // The ARM is always modelled; kept for old command lines.
-                "--arm" => {}
-                "--until" => until = Some(it.next().context("--until needs a text")?.to_string()),
-                "--send-after" => {
-                    let prompt = it.next().context("--send-after needs <prompt> <text>")?;
-                    let text = it.next().context("--send-after needs <prompt> <text>")?;
-                    let prompt = String::from_utf8(harness::boot::unescape(prompt))
-                        .context("--send-after: the prompt must be UTF-8")?;
-                    sends.push((prompt, harness::boot::unescape(text)));
-                }
-                "--magic-packet-after" => {
-                    magic_packet_after = Some(
-                        it.next()
-                            .context("--magic-packet-after needs a text")?
-                            .to_string(),
-                    )
-                }
-                "--stdin" => stdin = true,
-                "-v" | "--verbose" => verbose = true,
-                "-q" | "--quiet" => quiet = true,
-                "--log" => {
-                    let spec = it
-                        .next()
-                        .context("--log needs [text:|jsonl:]<channel>[,<channel>...]")?;
-                    log.add(Spec::parse(spec).map_err(anyhow::Error::msg)?)
-                        .map_err(anyhow::Error::msg)?
-                }
-                "--log-file" => {
-                    log_file = Some(it.next().context("--log-file needs a path")?.clone())
-                }
-                "--otp" => {
-                    otp = Some(
-                        it.next()
-                            .context("--otp needs json:<file> or binary:<file>")?
-                            .parse()?,
-                    )
-                }
-                "--sd" => take_medium(
-                    &mut sd,
-                    "--sd",
-                    Medium::from_arg(
-                        it.next()
-                            .context("--sd needs a path, a directory or a URL")?,
-                    ),
-                )?,
-                // What `--sd` does for a directory or a URL ending in `/`.
-                "--sd-dir" => take_medium(
-                    &mut sd,
-                    "--sd-dir",
-                    Medium::files_from_arg(it.next().context("--sd-dir needs a path or a URL")?),
-                )?,
-                "--config-txt" => card_edits.config.push(
-                    it.next()
-                        .context("--config-txt needs a config.txt line")?
-                        .to_string(),
-                ),
-                "--cmdline" => {
-                    card_edits.cmdline = Some(
-                        it.next()
-                            .context("--cmdline needs a command line")?
-                            .to_string(),
-                    )
-                }
-                "--emmc" => take_medium(
-                    &mut emmc,
-                    "--emmc",
-                    Medium::from_arg(
-                        it.next()
-                            .context("--emmc needs a path, a directory or a URL")?,
-                    ),
-                )?,
-                "--hat" => {
-                    hat_eeprom = Some(file_arg("--hat", it.next().context("--hat needs a path")?)?)
-                }
-                "--console-log" => {
-                    console_log = Some(PathBuf::from(
-                        it.next().context("--console-log needs a path")?,
-                    ))
-                }
-                "--usb" => take_medium(
-                    &mut usb,
-                    "--usb",
-                    Medium::from_arg(
-                        it.next()
-                            .context("--usb needs a path, a directory or a URL")?,
-                    ),
-                )?,
-                "--otg" => take_medium(
-                    &mut otg,
-                    "--otg",
-                    Medium::from_arg(
-                        it.next()
-                            .context("--otg needs a path, a directory or a URL")?,
-                    ),
-                )?,
-                "--usb-mb" => usb_mb = Some(it.next().context("--usb-mb needs a value")?.parse()?),
-                "--otg-dock" => otg_dock = true,
-                "--usb-uas" => usb_uas = UsbUas::On,
-                "--usb-uas-refuse" => usb_uas = UsbUas::Refused,
-                "--usb-wedge" => {
-                    let arg = it.next().context("--usb-wedge needs a mode")?;
-                    usb_host_silent = parse_host_silent(arg)?;
-                }
-                "--usb-model" => {
-                    let name = it.next().context("--usb-model needs a name")?;
-                    usb_model = StickModel::parse(name).with_context(|| {
-                        format!("--usb-model {name}: expected generic or rpi-flash-drive")
-                    })?;
-                }
-                "--scenario" | "--record" | "--plan" | "--from-log" | "--output" => {
-                    bail!("{a} belongs to --scenario, which `boot` takes out before this point")
-                }
-                "--display" => display = true,
-                "--display-edid" => {
-                    display = true;
-                    display_edid = Some(file_arg(
-                        "--display-edid",
-                        it.next().context("--display-edid needs a <file>")?,
-                    )?);
-                }
-                "--net" => {
-                    let spec = it.next().context("--net needs passt or passt:<socket>")?;
-                    host_net = Some(if spec == "passt" {
-                        HostNet::Passt
-                    } else {
-                        let sock = spec
-                            .strip_prefix("passt:")
-                            .or_else(|| spec.strip_prefix("stream:"))
-                            .with_context(|| {
-                                format!("--net {spec}: expected passt or passt:<socket>")
-                            })?;
-                        HostNet::Socket(PathBuf::from(sock))
-                    });
-                }
-                "--tftp" => {
-                    tftp = Some(NetRoot::from_arg(
-                        "--tftp",
-                        it.next().context("--tftp needs a directory or a URL")?,
-                    )?)
-                }
-                "--http" => {
-                    http = Some(NetRoot::from_arg(
-                        "--http",
-                        it.next().context("--http needs a directory or a URL")?,
-                    )?)
-                }
-                "--boot-order" => {
-                    boot_order = Some(it.next().context("--boot-order needs a value")?.to_string())
-                }
-                "--eeprom-pubkey" => {
-                    eeprom_pubkey = Some(file_arg(
-                        "--eeprom-pubkey",
-                        it.next().context("--eeprom-pubkey needs a file")?,
-                    )?)
-                }
-                "--maskrom" => {
-                    maskrom_path = Some(file_arg(
-                        "--maskrom",
-                        it.next().context("--maskrom needs a file")?,
-                    )?)
-                }
-                "--stepping" => {
-                    stepping = Some(Stepping::parse(
-                        it.next().context("--stepping needs b0 or c0")?,
-                    )?)
-                }
-                "--board-rev" => {
-                    board_rev = Some(Board::parse_revision(
-                        it.next().context("--board-rev needs a revision code")?,
-                    )?)
-                }
-                "--bootconf" => {
-                    let kv = it.next().context("--bootconf needs KEY=VALUE")?;
-                    if !kv.contains('=') {
-                        bail!("--bootconf: expected KEY=VALUE, got '{kv}'");
-                    }
-                    bootconf.push(kv.to_string())
-                }
-                "--otp-row" => {
-                    let kv = it.next().context("--otp-row needs ROW=VALUE")?;
-                    let (row, value) = kv
-                        .split_once('=')
-                        .with_context(|| format!("--otp-row: expected ROW=VALUE, got '{kv}'"))?;
-                    let row = parse_u32(row).with_context(|| format!("--otp-row '{kv}'"))?;
-                    let value = parse_u32(value).with_context(|| format!("--otp-row '{kv}'"))?;
-                    otp_rows.push((row, value))
-                }
-                "--skip-signed-boot" => skip_signed_boot = true,
-                "--tryboot" => tryboot = true,
-                "--orderly-reboot" => orderly_reboot = true,
-                "--skip-unimpl" => skip_unimpl = true,
-                "--check-coherency" => check_coherency = true,
-                "--check-alignment" => check_alignment = true,
-                "--faults" => {
-                    let rate = it.next().context("--faults needs a number")?;
-                    faults =
-                        Some(rate.parse::<u64>().with_context(|| {
-                            format!("--faults: expected a number, got '{rate}'")
-                        })?);
-                }
-                "--jitter" => {
-                    let seed = it.next().context("--jitter needs a seed")?;
-                    jitter =
-                        Some(seed.parse::<u64>().with_context(|| {
-                            format!("--jitter: expected a number, got '{seed}'")
-                        })?);
-                }
-                "--dump" => {
-                    let spec = it.next().context("--dump needs <hexaddr>:<len>")?;
-                    let (a, n) = spec.split_once(':').context("--dump: expected addr:len")?;
-                    dumps.push((parse_u32(a)?, parse_u32(n)?));
-                }
-                "--disasm" => {
-                    let spec = it.next().context("--disasm needs <hexaddr>:<count>")?;
-                    let (a, n) = spec
-                        .split_once(':')
-                        .context("--disasm: expected addr:count")?;
-                    disasms.push((parse_u32(a)?, parse_u32(n)?));
-                }
-                "--print-fdt" => print_fdt = true,
-                "--gencmd" => {
-                    let command = it.next().context("--gencmd needs a command line")?;
-                    gencmds.push(command.clone());
-                }
-                "--mbox-property" => {
-                    let list = it.next().context("--mbox-property needs a tag list")?;
-                    let mut group: Vec<MboxTag> = Vec::new();
-                    for t in list.split(',') {
-                        // `<tag>[:<value-buffer bytes>][=<word>.<word>...]`. start4's
-                        // idea of a tag's size is not always its Linux client's
-                        // `sizeof`; crypto `key_id`s are **1-based**, and key 0
-                        // answers `KEY_NOT_FOUND`.
-                        let (head, req) = match t.split_once('=') {
-                            Some((a, b)) => (
-                                a,
-                                b.split('.').map(parse_u32).collect::<Result<Vec<u32>>>()?,
-                            ),
-                            None => (t, Vec::new()),
-                        };
-                        let (tag, size) = match head.split_once(':') {
-                            Some((a, b)) => (parse_u32(a)?, Some(parse_u32(b)?)),
-                            None => (parse_u32(head)?, None),
-                        };
-                        group.push((tag, size, req));
-                    }
-                    mbox_tags.push(MboxRequest::Tags(group));
-                }
-                "--mbox-raw" => {
-                    let hex = it.next().context("--mbox-raw needs a hex image")?;
-                    mbox_tags.push(MboxRequest::Raw(parse_hex_image(hex)?));
-                }
-                "--dram-map" => dram_map = true,
-                "--eeprom-map" => eeprom_map = true,
-                "--stub-log" => stub_log = true,
-                "--control-transfers" => control_transfers = true,
-                "--dump-eeprom" => {
-                    dump_eeprom = Some(PathBuf::from(
-                        it.next().context("--dump-eeprom needs a path")?,
-                    ))
-                }
-                "--dump-fdt" => {
-                    dump_fdt = Some(PathBuf::from(it.next().context("--dump-fdt needs a path")?))
-                }
-                "--patch" => {
-                    let spec = it.next().context("--patch needs <hexaddr>=<hexval>")?;
-                    let (a, v) = spec.split_once('=').context("--patch: expected addr=val")?;
-                    patches.push((parse_u32(a)?, parse_u32(v)?));
-                }
-                "-h" | "--help" => return Ok(None),
-                s if pimu::remote::is_url(s) => url = Some(s.to_string()),
-                s if !s.starts_with('-') => path = Some(PathBuf::from(s)),
-                s => bail!("unexpected argument '{s}' (try boot --help)"),
-            }
+        use clap::CommandFactory;
+        let argv = std::iter::once("boot").chain(args.iter().map(String::as_str));
+        match BootArgs::command().try_get_matches_from(argv) {
+            Err(e) if e.kind() == clap::error::ErrorKind::DisplayHelp => Ok(None),
+            m => Self::from_matches(&m?, dir).map(Some),
         }
+    }
+
+    fn from_matches(m: &ArgMatches, dir: &Path) -> Result<Self> {
+        let mut args = BootArgs::from_arg_matches(m)?;
+        let mbox_tags = args.take_mbox_requests(m);
+        Self::resolve(args, mbox_tags, dir)
+    }
+
+    fn resolve(a: BootArgs, mbox_tags: Vec<MboxRequest>, dir: &Path) -> Result<Self> {
+        if let Some(flag) = a.trace_wanted().filter(|_| !pimu::diag::ON) {
+            bail!("{flag} needs a build with the `diag` feature: cargo build --release --features diag");
+        }
+        let sends = a.send_after()?;
+        let mut sd = match (&a.sd, &a.sd_dir) {
+            (Some(s), _) => Some(Medium::from_arg(s)),
+            (None, Some(s)) => Some(Medium::files_from_arg(s)),
+            (None, None) => None,
+        };
+        let emmc = a.emmc.as_deref().map(Medium::from_arg);
+        let mut usb = a.usb.as_deref().map(Medium::from_arg);
+        let mut otg = a.otg.as_deref().map(Medium::from_arg);
+        let mut tftp = a
+            .tftp
+            .as_deref()
+            .map(|s| NetRoot::from_arg("--tftp", s))
+            .transpose()?;
+        let mut http = a
+            .http
+            .as_deref()
+            .map(|s| NetRoot::from_arg("--http", s))
+            .transpose()?;
+        let flash = a
+            .eeprom
+            .as_deref()
+            .map(|p| file_arg("--eeprom", p))
+            .transpose()?;
+
         // A URL argument reads as the path one does: ending in `/` it is a
         // directory, and so the card the machine boots from — the EEPROM
-        // bootloader for it comes from the fallback below, as it does for a
-        // firmware checkout. Anything else is the file to boot, fetched into
-        // the cache, and an image named like an EEPROM one is booted as one.
-        if let Some(url) = url.take() {
-            if url.ends_with('/') {
-                take_medium(&mut sd, "boot <url>", Medium::RemoteFiles(url.clone()))?;
-            } else {
-                let file = file_arg("boot", &url)?;
+        // bootloader for it comes from --eeprom or the fallback below, as it
+        // does for a firmware checkout. Anything else is the file to boot,
+        // fetched into the cache, and an image named like an EEPROM one is
+        // booted as one.
+        let mut eeprom = flash.is_some();
+        let mut path = match a.target.as_deref() {
+            Some(url) if pimu::remote::is_url(url) && url.ends_with('/') => {
+                take_medium(&mut sd, "boot <url>", Medium::RemoteFiles(url.to_string()))?;
+                None
+            }
+            Some(url) if pimu::remote::is_url(url) => {
                 eeprom |= url
                     .rsplit('/')
                     .next()
                     .is_some_and(|name| name.starts_with("pieeprom"));
-                path = Some(file);
+                Some(file_arg("boot", url)?)
             }
-        }
+            Some(file) => Some(PathBuf::from(file)),
+            None => None,
+        };
         // A directory to boot: read from there, as `-C` does, and it is itself
         // the card when it holds a boot partition's files.
         let from = match path.take_if(|p| p.is_dir()) {
             Some(p) => p,
             None => dir.to_path_buf(),
         };
+        if let (Some(file), Some(flash)) = (&path, &flash) {
+            bail!(
+                "boot {} --eeprom {}: two images to boot. Give the EEPROM image to \
+                 --eeprom alone, or a directory to read the rest from",
+                file.display(),
+                flash.display()
+            );
+        }
+        path = path.or(flash);
+
         let mut zero = ZeroConfig::new(&from);
         if path.is_none() {
             zero.file(&mut path, "pieeprom.bin");
@@ -1327,7 +519,7 @@ impl BootOpts {
         }
         zero.image(&mut usb, "usb.img");
         zero.image(&mut otg, "otg.img");
-        if host_net.is_none() {
+        if a.net.is_none() {
             if tftp.is_none() {
                 let mut found = None;
                 zero.dir(&mut found, "tftp");
@@ -1339,37 +531,39 @@ impl BootOpts {
                 http = found.map(NetRoot::Dir);
             }
         }
-        if otp.is_none() {
-            otp = zero.otp()?;
-        }
-        if bootconf.is_empty() {
-            bootconf = zero.bootconf()?;
-        }
+        let otp = match a.otp {
+            Some(otp) => Some(otp),
+            None => zero.otp()?,
+        };
+        let bootconf = match a.bootconf.is_empty() {
+            true => zero.bootconf()?,
+            false => a.bootconf,
+        };
+        let mut eeprom_pubkey = a
+            .eeprom_pubkey
+            .as_deref()
+            .map(|p| file_arg("--eeprom-pubkey", p))
+            .transpose()?;
         zero.file(&mut eeprom_pubkey, "pubkey.bin");
         zero.announce();
 
-        if path.is_none() {
+        let Some(path) = path else {
             bail!(
                 "no EEPROM image to boot with: neither a firmware checkout nor a disk \
                  image is a bootloader. Give a pieeprom.bin with --eeprom, or keep one \
                  beside the files"
             );
-        }
-        let path = path.context("boot: missing <file> (try boot --help)")?;
-        if (tftp.is_some() || http.is_some()) && host_net.is_some() {
-            bail!("--tftp and --http serve the built-in peer, which --net replaces; give one");
-        }
-        if magic_packet_after.is_some() && host_net.is_some() {
-            bail!(
-                "--magic-packet-after is sent by the built-in peer, which --net replaces; give one"
-            );
-        }
-        if log.is_empty() && log_file.is_some() {
-            bail!("--log-file needs --log <channel>[,<channel>...]");
-        }
+        };
         if sd.is_some() && emmc.is_some() {
             bail!("--sd and --emmc are the same host: give one");
         }
+        let usb_uas = match (a.usb_uas, a.usb_uas_refuse) {
+            (_, true) => UsbUas::Refused,
+            (true, false) => UsbUas::On,
+            (false, false) => UsbUas::Off,
+        };
+        let usb_model = a.usb_model.unwrap_or_default();
+        let usb_host_silent = a.usb_wedge.unwrap_or_default();
         if (usb_host_silent != HostSilent::Model || usb_model != StickModel::Generic)
             && usb.is_none()
         {
@@ -1381,6 +575,10 @@ impl BootOpts {
         if usb_uas != UsbUas::Off && usb.is_none() {
             bail!("--usb-uas and --usb-uas-refuse change the --usb stick: give --usb too");
         }
+        let card_edits = CardEdits {
+            config: a.config_txt,
+            cmdline: a.cmdline,
+        };
         let files_somewhere = [&sd, &usb, &otg, &emmc]
             .into_iter()
             .flatten()
@@ -1392,77 +590,89 @@ impl BootOpts {
                  since a disk image is opaque"
             );
         }
-        Ok(Some(Self {
+        let mut log = Spec::default();
+        for spec in &a.log {
+            log.add(*spec).map_err(anyhow::Error::msg)?;
+        }
+        Ok(Self {
             path,
-            snapshot_save,
-            snapshot_load,
-            entry,
-            usb_mb,
-            otg_dock,
+            snapshot_save: a.snapshot_save,
+            snapshot_load: a.snapshot_load,
+            entry: a.entry,
+            usb_mb: a.usb_mb,
+            otg_dock: a.otg_dock,
             usb_uas,
             usb_model,
             usb_host_silent,
-            display,
-            display_edid,
-            max_steps,
-            max_wall_secs,
-            speed,
+            display: a.display || a.display_edid.is_some(),
+            display_edid: a
+                .display_edid
+                .as_deref()
+                .map(|p| file_arg("--display-edid", p))
+                .transpose()?,
+            max_steps: a.max_steps,
+            max_wall_secs: a.max_wall.unwrap_or(140),
+            speed: a.speed.map_or(Some(1.0), |s| s.0),
             eeprom,
-            trace,
-            trace_full,
-            trace_mmio,
-            exc_vbase,
-            trace_from,
-            smp,
-            parallel,
-            as_core1,
-            patches,
-            dumps,
-            disasms,
+            trace: a.trace || a.trace_full || a.trace_from.is_some(),
+            trace_full: a.trace_full,
+            trace_mmio: a.trace_mmio,
+            exc_vbase: a.exc_vbase.unwrap_or(0),
+            trace_from: a.trace_from.unwrap_or(0),
+            smp: a.smp,
+            parallel: a.parallel,
+            as_core1: a.as_core1,
+            patches: a.patch,
+            dumps: a.dump,
+            disasms: a.disasm,
             sd,
             card_edits,
             emmc,
-            hat_eeprom,
-            check_coherency,
-            check_alignment,
-            jitter,
-            faults,
-            console_log,
-            dump_fdt,
-            dump_eeprom,
-            print_fdt,
+            hat_eeprom: a.hat.as_deref().map(|p| file_arg("--hat", p)).transpose()?,
+            check_coherency: a.check_coherency,
+            check_alignment: a.check_alignment,
+            jitter: a.jitter,
+            faults: a.faults,
+            console_log: a.console_log,
+            dump_fdt: a.dump_fdt,
+            dump_eeprom: a.dump_eeprom,
+            print_fdt: a.print_fdt,
             mbox_tags,
-            gencmds,
+            gencmds: a.gencmd,
             usb,
             otg,
             tftp,
             http,
-            host_net,
-            boot_order,
+            host_net: a.net,
+            boot_order: a.boot_order,
             bootconf,
-            otp_rows,
             eeprom_pubkey,
-            maskrom_path,
-            stepping,
-            board_rev,
-            dram_map,
-            eeprom_map,
-            stub_log,
-            control_transfers,
-            skip_signed_boot,
-            tryboot,
-            orderly_reboot,
-            skip_unimpl,
-            until,
+            maskrom_path: a
+                .maskrom
+                .as_deref()
+                .map(|p| file_arg("--maskrom", p))
+                .transpose()?,
+            stepping: a.stepping,
+            board_rev: a.board_rev,
+            dram_map: a.dram_map,
+            eeprom_map: a.eeprom_map,
+            stub_log: a.stub_log,
+            control_transfers: a.control_transfers,
+            skip_signed_boot: a.skip_signed_boot,
+            tryboot: a.tryboot,
+            orderly_reboot: a.orderly_reboot,
+            skip_unimpl: a.skip_unimpl,
+            until: a.until,
             sends,
-            magic_packet_after,
-            stdin,
-            verbose,
-            quiet,
+            magic_packet_after: a.magic_packet_after,
+            stdin: a.stdin,
+            verbose: a.verbose,
+            quiet: a.quiet,
             log,
-            log_file,
+            log_file: a.log_file,
             otp,
-        }))
+            otp_rows: a.otp_row,
+        })
     }
 }
 
@@ -1477,14 +687,12 @@ struct Booted {
     fuses_at_start: BTreeMap<u32, u32>,
 }
 
-pub fn cmd_boot(args: &[String]) -> Result<ExitCode> {
-    if let Some((flags, extras)) = crate::check::split(args)? {
-        return crate::check::run(&flags, &extras);
+/// `boot`: `args` is its command line, `m` what the parser made of it.
+pub fn cmd_boot(args: &[String], m: &ArgMatches) -> Result<ExitCode> {
+    if let Some(flags) = crate::check::Flags::from_matches(m)? {
+        return crate::check::run(&flags, &crate::check::extras(args));
     }
-    let Some(opts) = BootOpts::parse(args, Path::new(""))? else {
-        print!("{HELP}");
-        return Ok(ExitCode::SUCCESS);
-    };
+    let opts = BootOpts::from_matches(m, Path::new(""))?;
     pimu::log::warn_replaced_env();
     let booted = run_boot(&opts)?;
     print_report(&opts, booted)
@@ -1749,20 +957,6 @@ fn open_log(opts: &BootOpts) -> Result<Log> {
         Some(p) => Box::new(std::fs::File::create(p).with_context(|| format!("creating {p}"))?),
     };
     Ok(Log::new(opts.log, out))
-}
-
-/// `host-silent:<seconds>` or `host-silent:off`.
-fn parse_host_silent(arg: &str) -> Result<HostSilent> {
-    let seconds = arg.strip_prefix("host-silent:").with_context(|| {
-        format!("--usb-wedge {arg}: expected host-silent:<seconds> or host-silent:off")
-    })?;
-    if seconds == "off" {
-        return Ok(HostSilent::Off);
-    }
-    match seconds.parse::<f64>() {
-        Ok(s) if s.is_finite() && s >= 0.0 => Ok(HostSilent::AfterUs((s * 1e6) as u64)),
-        _ => bail!("--usb-wedge {arg}: the time must be a number of seconds, or off"),
-    }
 }
 
 /// What kind of stick `--usb` is.
@@ -2973,9 +2167,10 @@ fn parse_addr_range(s: &str) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use clap::CommandFactory;
 
     use super::*;
+    use crate::boot_args::parse_host_silent;
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -3584,50 +2779,50 @@ mod tests {
     }
 
     /// The options `boot --help` lists: the lines that start with one.
-    fn documented() -> BTreeSet<&'static str> {
-        HELP.lines()
-            .filter(|l| l.starts_with("    -"))
-            .flat_map(|l| l.trim_start().split("  ").next().unwrap_or("").split(", "))
-            .filter_map(|o| o.split(' ').next())
-            .collect()
-    }
-
-    /// Read out of `parse`'s source: the string literals that are an option name
-    /// and nothing else. A double quote in a comment inside `parse` breaks this.
-    fn parsed() -> BTreeSet<&'static str> {
-        let src = include_str!("boot.rs");
-        let start = src.find("fn parse(").unwrap();
-        let end = start + src[start..].find("let path = path.context").unwrap();
-        src[start..end]
-            .split('"')
-            .skip(1)
-            .step_by(2)
-            .filter(|s| {
-                s.len() > 1
-                    && s.starts_with('-')
-                    && s.bytes()
-                        .all(|b| b == b'-' || b.is_ascii_lowercase() || b.is_ascii_digit())
-            })
-            .collect()
+    #[test]
+    fn the_declarations_hold_together() {
+        BootArgs::command().debug_assert();
     }
 
     #[test]
-    fn help_lists_every_option_the_parser_takes() {
-        // `--arm` is a no-op and `--sd-dir` is what `--sd <dir>` does; both
-        // are kept for old command lines.
-        let hidden = ["--arm", "--sd-dir"];
-        let (documented, parsed) = (documented(), parsed());
-        for o in &parsed {
-            assert!(
-                documented.contains(o) || hidden.contains(o),
-                "{o} is missing from boot --help"
-            );
-        }
-        for o in &documented {
-            assert!(
-                parsed.contains(o),
-                "boot --help lists {o}, which boot does not take"
-            );
-        }
+    fn a_directory_beside_eeprom_is_the_card() {
+        let dir = zero_dir("eeprom-beside");
+        put(&dir, "start4.elf", "");
+        put(&dir, "config.txt", "");
+        let o = BootOpts::parse(
+            &args(&[dir.to_str().unwrap(), "--eeprom", "pieeprom.bin"]),
+            Path::new(""),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.path, PathBuf::from("pieeprom.bin"));
+        assert!(o.eeprom);
+        assert_eq!(o.sd, Some(Medium::Files(dir.clone())));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn eeprom_takes_its_value_either_way_and_always() {
+        let path = |v: &[&str]| BootOpts::parse(&args(v), Path::new("")).map(|o| o.unwrap().path);
+        assert_eq!(
+            path(&["--eeprom", "e.bin"]).unwrap(),
+            PathBuf::from("e.bin")
+        );
+        assert_eq!(path(&["--eeprom=e.bin"]).unwrap(), PathBuf::from("e.bin"));
+        assert!(path(&["e.bin", "--eeprom"]).is_err());
+        let err = path(&["x.elf", "--eeprom", "e.bin"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("two images"), "{err}");
+    }
+
+    #[test]
+    fn a_second_positional_is_an_error() {
+        assert!(BootOpts::parse(&args(&["a.elf", "b.elf"]), Path::new("")).is_err());
+    }
+
+    #[test]
+    fn a_flag_takes_no_value() {
+        assert!(BootOpts::parse(&args(&["x.elf", "--quiet=1"]), Path::new("")).is_err());
     }
 }

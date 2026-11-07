@@ -607,8 +607,8 @@ impl BootScenario {
     pub fn boot_args(&self, console_log: &Path) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "boot".into(),
-            self.eeprom_path().display().to_string(),
             "--eeprom".into(),
+            self.eeprom_path().display().to_string(),
             // The milestones read the run report too, not only the console.
             "--verbose".into(),
         ];

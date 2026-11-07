@@ -39,7 +39,7 @@ trace just before it, then watch the state it depends on.
 
 ```bash
 # 1. Where did it stop?  The run report's `end` and `final pc` say.
-boot firmware/pieeprom.bin --eeprom --sd firmware/sd.img
+boot --eeprom firmware/pieeprom.bin --sd firmware/sd.img
 
 # 1b. What did it branch through on the way, and what did it poke that
 #     nothing models?  Neither is in the report by default.

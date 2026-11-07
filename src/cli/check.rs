@@ -9,9 +9,12 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use clap::{ArgMatches, FromArgMatches};
 
 use pimu::harness;
 use pimu::harness::boot::{GoldenCheck, RetiredCounts};
+
+use crate::boot_args::BootArgs;
 
 /// What `--scenario` and the options that only mean something with it ask for.
 pub struct Flags {
@@ -20,64 +23,45 @@ pub struct Flags {
     plan: bool,
     from_log: Option<PathBuf>,
     output: Option<PathBuf>,
+    max_wall: Option<u64>,
 }
 
-/// Take the scenario options out of `args`. What is left goes to the boot as it
+impl Flags {
+    /// `None` without `--scenario`, when the command line is one boot's.
+    pub fn from_matches(m: &ArgMatches) -> Result<Option<Flags>> {
+        let a = BootArgs::from_arg_matches(m)?;
+        Ok(a.scenario.map(|path| Flags {
+            path,
+            record: a.record,
+            plan: a.plan,
+            from_log: a.from_log,
+            output: a.output,
+            max_wall: a.max_wall,
+        }))
+    }
+}
+
+/// The command line without the scenario options: it goes to the boot as it
 /// is, after the scenario's own options, so it overrides them.
-pub fn split(args: &[String]) -> Result<Option<(Flags, Vec<String>)>> {
-    let mut path = None;
-    let mut flags = Flags {
-        path: PathBuf::new(),
-        record: false,
-        plan: false,
-        from_log: None,
-        output: None,
-    };
+pub fn extras(args: &[String]) -> Vec<String> {
     let mut rest = Vec::with_capacity(args.len());
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let mut value = |what: &str| {
-            it.next()
-                .map(PathBuf::from)
-                .with_context(|| format!("{what} needs a path"))
+        let (name, inline) = match a.split_once('=') {
+            Some((name, _)) if a.starts_with("--") => (name, true),
+            _ => (a.as_str(), false),
         };
-        match a.as_str() {
-            "--scenario" => path = Some(value("--scenario")?),
-            "--record" => flags.record = true,
-            "--plan" => flags.plan = true,
-            "--from-log" => flags.from_log = Some(value("--from-log")?),
-            "--output" => flags.output = Some(value("--output")?),
+        match name {
+            "--scenario" | "--from-log" | "--output" => {
+                if !inline {
+                    it.next();
+                }
+            }
+            "--record" | "--plan" => {}
             _ => rest.push(a.clone()),
         }
     }
-    let Some(path) = path else {
-        for (given, name) in [
-            (flags.record, "--record"),
-            (flags.plan, "--plan"),
-            (flags.from_log.is_some(), "--from-log"),
-            (flags.output.is_some(), "--output"),
-        ] {
-            if given {
-                bail!("{name} goes with --scenario");
-            }
-        }
-        return Ok(None);
-    };
-    flags.path = path;
-    if flags.from_log.is_some() && (flags.plan || flags.output.is_some()) {
-        bail!("--from-log checks an earlier run: it takes no --plan or --output");
-    }
-    Ok(Some((flags, rest)))
-}
-
-fn wall_override(extras: &[String]) -> Result<Option<u64>> {
-    let Some(at) = extras.iter().rposition(|a| a == "--max-wall") else {
-        return Ok(None);
-    };
-    let secs = extras.get(at + 1).context("--max-wall needs seconds")?;
-    Ok(Some(secs.parse().with_context(|| {
-        format!("--max-wall {secs}: not a number of seconds")
-    })?))
+    rest
 }
 
 /// The scenario files `path` names: itself, or the `*.yaml` in it.
@@ -102,11 +86,10 @@ pub fn run(flags: &Flags, extras: &[String]) -> Result<ExitCode> {
     }
     let files = scenario_files(&flags.path)?;
     let several = flags.path.is_dir();
-    let wall = wall_override(extras)?;
     let mut results: Vec<(String, bool)> = Vec::new();
     for file in &files {
         let mut scn = harness::BootScenario::load(file)?;
-        if let Some(secs) = wall {
+        if let Some(secs) = flags.max_wall {
             scn.boot.wall_secs = secs;
         }
         if several {
@@ -380,15 +363,24 @@ fn check_boot(
 
 #[cfg(test)]
 mod tests {
+    use clap::CommandFactory;
+
     use super::*;
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
     }
 
+    fn split(a: &[&str]) -> Result<Option<(Flags, Vec<String>)>> {
+        let raw = args(a);
+        let m = BootArgs::command()
+            .try_get_matches_from(std::iter::once("boot").chain(a.iter().copied()))?;
+        Ok(Flags::from_matches(&m)?.map(|flags| (flags, extras(&raw))))
+    }
+
     #[test]
     fn the_scenario_options_come_out_and_the_rest_goes_to_the_boot() {
-        let (flags, rest) = split(&args(&[
+        let (flags, rest) = split(&[
             "--max-wall",
             "600",
             "--scenario",
@@ -397,30 +389,24 @@ mod tests {
             "--output",
             "out.log",
             "-v",
-        ]))
+        ])
         .unwrap()
         .expect("a scenario");
         assert_eq!(flags.path, PathBuf::from("s.yaml"));
         assert!(flags.plan && !flags.record);
         assert_eq!(flags.output, Some(PathBuf::from("out.log")));
         assert_eq!(rest, args(&["--max-wall", "600", "-v"]));
-        assert_eq!(wall_override(&rest).unwrap(), Some(600));
+        assert_eq!(flags.max_wall, Some(600));
     }
 
     #[test]
     fn a_plain_boot_is_left_alone_and_a_stray_scenario_option_is_refused() {
-        assert!(split(&args(&["--sd", "x.img"])).unwrap().is_none());
-        let err = split(&args(&["--record"])).err().expect("refused");
-        assert!(err.to_string().contains("goes with --scenario"), "{err}");
-        let err = split(&args(&[
-            "--scenario",
-            "s.yaml",
-            "--from-log",
-            "l",
-            "--plan",
-        ]))
-        .err()
-        .expect("refused");
+        assert!(split(&["--sd", "x.img"]).unwrap().is_none());
+        let err = split(&["--record"]).err().expect("refused");
+        assert!(err.to_string().contains("--scenario"), "{err}");
+        let err = split(&["--scenario", "s.yaml", "--from-log", "l", "--plan"])
+            .err()
+            .expect("refused");
         assert!(err.to_string().contains("--from-log"), "{err}");
     }
 
@@ -434,6 +420,7 @@ mod tests {
             plan: false,
             from_log: None,
             output: output.map(PathBuf::from),
+            max_wall: None,
         };
         assert_eq!(
             log_path(&flags(None), &scn, false),

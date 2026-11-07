@@ -12,6 +12,7 @@ const MBOX_BUFFER: u32 = 0x1000_0000;
 pub type MboxTag = (u32, Option<u32>, Vec<u32>);
 
 /// What one exchange posts.
+#[derive(Clone, Debug)]
 pub enum MboxRequest {
     /// `--mbox-property`: tags staged the way a well-behaved client lays a request out.
     Tags(Vec<MboxTag>),

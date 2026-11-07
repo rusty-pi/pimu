@@ -27,6 +27,7 @@ bincode = "1.3"
 sha1 = "0.10"
 toml = "0.8"
 yaml_serde = "0.10.7"
+clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
 
 [features]
 default = ["repo"]
