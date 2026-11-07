@@ -418,6 +418,26 @@ test.describe("what the machine reports", () => {
     await expect(app.page.locator("#led-act")).toHaveAttribute("data-on", "true");
   });
 
+  test("the watchdog shows what is left of its countdown and flashes on each heartbeat", async ({ app }) => {
+    await app.running();
+    const dog = app.page.locator("#wdog");
+    const left = app.page.locator("#wdog-left");
+    await expect(dog).toHaveAttribute("data-state", "off");
+    await app.emit({ type: "state", io: {}, state: stateOf({ watchdog: { leftUs: 750_000, windowUs: 1_000_000, feeds: 3 } }) });
+    await expect(dog).toHaveAttribute("data-state", "on");
+    await expect(dog).toHaveAttribute("data-beat", "true");
+    await expect(left).toHaveAttribute("width", "60.0");
+    await expect(app.page.locator("#wdog-title")).toHaveText("Watchdog: 0.75 s of 1.00 s left, fed 3 times");
+    await app.page.evaluate(() => (document.querySelector("#wdog").dataset.beat = "false"));
+    await app.emit({ type: "state", io: {}, state: stateOf({ watchdog: { leftUs: 100_000, windowUs: 1_000_000, feeds: 3 } }) });
+    await expect(dog).toHaveAttribute("data-state", "low");
+    await expect(dog).toHaveAttribute("data-beat", "false");
+    await app.emit({ type: "state", io: {}, state: stateOf({ watchdog: { leftUs: 1_000_000, windowUs: 1_000_000, feeds: 4 } }) });
+    await expect(dog).toHaveAttribute("data-beat", "true");
+    await app.powerButton.click();
+    await expect(dog).toHaveAttribute("data-state", "off");
+  });
+
   test("the clock counts VPU and ARM instructions and the disk it has read", async ({ app }) => {
     await app.page.clock.install({ time: 0 });
     await app.page.clock.pauseAt(1000);
@@ -569,7 +589,7 @@ test.describe("downloads", () => {
   });
 });
 
-function stateOf({ arm = ["off", "off", "off", "off"], vpu = ["running", "off"], retired = 1_000_000, insns = 0, modelUs = 1_000_000, reboots = 0, ended = false, ok = null, why = null } = {}) {
+function stateOf({ arm = ["off", "off", "off", "off"], vpu = ["running", "off"], retired = 1_000_000, insns = 0, modelUs = 1_000_000, reboots = 0, ended = false, ok = null, why = null, watchdog = { leftUs: null, windowUs: null, feeds: 0 } } = {}) {
   const per = Math.round(insns / 4);
   return {
     ended,
@@ -580,6 +600,7 @@ function stateOf({ arm = ["off", "off", "off", "off"], vpu = ["running", "off"],
     modelUs,
     retired,
     logDropped: 0,
+    watchdog,
     cores: {
       arm: arm.map((state) => ({ state, insns: state === "off" ? 0 : per })),
       vpu: vpu.map((state) => ({ state, insns: state === "off" ? 0 : retired })),

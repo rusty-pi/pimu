@@ -59,6 +59,8 @@ pub struct Pm {
     storage: BTreeMap<u32, u32>,
     now_us: u64,
     deadline_us: Option<u64>,
+    window_us: u64,
+    feeds: u64,
     reset_pending: bool,
 }
 
@@ -81,6 +83,18 @@ impl Pm {
 
     pub fn watchdog_running(&self) -> bool {
         self.deadline_us.is_some()
+    }
+
+    /// What is left of the running countdown, and the window it was last
+    /// armed or fed with.
+    pub fn watchdog_left_us(&self) -> Option<(u64, u64)> {
+        self.deadline_us
+            .map(|d| (d.saturating_sub(self.now_us), self.window_us))
+    }
+
+    /// `WDOG` writes that reloaded a running countdown: the heartbeats.
+    pub fn watchdog_feeds(&self) -> u64 {
+        self.feeds
     }
 
     fn us_for(ticks: u32) -> u64 {
@@ -168,7 +182,8 @@ impl MmioDevice for Pm {
             // that must not count as anything.
             if value & RSTC_WRCFG_FULL_RESET != 0 {
                 let ticks = self.storage.get(&WDOG).copied().unwrap_or(0) & WDOG_TIME_MASK;
-                self.deadline_us = Some(self.now_us + Self::us_for(ticks));
+                self.window_us = Self::us_for(ticks);
+                self.deadline_us = Some(self.now_us + self.window_us);
             } else {
                 self.deadline_us = None;
             }
@@ -176,7 +191,9 @@ impl MmioDevice for Pm {
         // The register is the counter: writing it while the dog runs reloads
         // it, which is the firmware's whole heartbeat (module docs).
         if off == WDOG && passworded && self.deadline_us.is_some() {
-            self.deadline_us = Some(self.now_us + Self::us_for(value & WDOG_TIME_MASK));
+            self.window_us = Self::us_for(value & WDOG_TIME_MASK);
+            self.deadline_us = Some(self.now_us + self.window_us);
+            self.feeds += 1;
         }
         self.storage.insert(off, value);
         Ok(())
@@ -301,9 +318,11 @@ mod tests {
             pm.write(WDOG, Width::Word, PASSWD | WDOG_TIME_MASK)
                 .unwrap();
             assert_eq!(pm.read(WDOG, Width::Word).unwrap(), WDOG_TIME_MASK);
+            assert_eq!(pm.watchdog_feeds(), beat);
         }
         let window = Pm::us_for(WDOG_TIME_MASK);
         pm.advance(60_000_000 + window - 1);
+        assert_eq!(pm.watchdog_left_us(), Some((1, window)));
         assert!(!pm.take_reset());
         pm.advance(60_000_000 + window);
         assert!(pm.take_reset());
@@ -317,6 +336,8 @@ mod tests {
         let mut pm = Pm::new();
         pm.write(WDOG, Width::Word, PASSWD | 10).unwrap();
         assert!(!pm.watchdog_running());
+        assert_eq!(pm.watchdog_left_us(), None);
+        assert_eq!(pm.watchdog_feeds(), 0);
         pm.advance(10_000_000);
         assert!(!pm.take_reset());
         pm.write(RSTC, Width::Word, PASSWD | RSTC_WRCFG_FULL_RESET)

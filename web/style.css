@@ -198,6 +198,18 @@ button.switch[aria-checked="true"] .track::after { left: 16px; }
 #board .led.red[data-on="true"] { fill: #ff4b3e; opacity: 1; }
 #board .led.green[data-on="true"] { fill: #2fd16f; opacity: 1; }
 
+/* the watchdog: what is left of its countdown, and a flash on each heartbeat */
+#board .wdog-track { fill: none; stroke: var(--dim); stroke-width: 1; }
+#board .wdog-left { fill: var(--wire); transition: width .3s linear; }
+#board .wdog[data-state="off"] { opacity: .5; }
+#board .wdog[data-state="low"] .wdog-left { fill: var(--changed); }
+#board .wdog[data-beat="true"] .wdog-left { animation: beat .35s ease-out; }
+@keyframes beat { from { fill: var(--power); } }
+@media (prefers-reduced-motion: reduce) {
+  #board .wdog-left { transition: none; }
+  #board .wdog[data-beat="true"] .wdog-left { animation: none; }
+}
+
 #board .part, #board .power { cursor: pointer; }
 #board .part:hover .hit, #board .power:hover .hit { stroke: var(--focus); stroke-width: 1.5; }
 #board .part:focus-visible .hit, #board .power:focus-visible .hit, #board .part[data-open="true"] .hit { stroke: var(--focus); stroke-width: 2.4; }

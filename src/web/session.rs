@@ -469,8 +469,15 @@ impl Session {
 
     pub fn status(&mut self) -> serde_json::Value {
         let cores = self.cores();
+        let pm = &self.emu.machine.pm;
+        let watchdog = pm.watchdog_left_us();
         json!({
             "cores": cores,
+            "watchdog": {
+                "leftUs": watchdog.map(|w| w.0),
+                "windowUs": watchdog.map(|w| w.1),
+                "feeds": pm.watchdog_feeds(),
+            },
             "ended": self.ended.is_some(),
             "ok": self.ended.as_ref().map(|e| e.0),
             "why": self.ended.as_ref().map(|e| e.1.as_str()),

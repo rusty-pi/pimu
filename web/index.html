@@ -42,6 +42,12 @@
         <text class="tb" x="316" y="148" id="soc-title">BCM2711 C0</text>
         <circle class="led red" id="led-power" cx="566" cy="141" r="4"/><text class="m" x="574" y="145">PWR</text>
         <circle class="led green" id="led-act" cx="618" cy="141" r="4"/><text class="m" x="626" y="145">ACT</text>
+        <g id="wdog" class="wdog" data-state="off">
+          <title id="wdog-title">Watchdog: not armed</title>
+          <text class="m" x="436" y="145">WDOG</text>
+          <rect class="wdog-track" x="466" y="137" width="80" height="8" rx="1"/>
+          <rect class="wdog-left" id="wdog-left" x="466" y="137" width="0" height="8" rx="1"/>
+        </g>
         <rect class="grp" x="326" y="164" width="146" height="140" rx="2"/>
         <text class="t" x="399" y="182" text-anchor="middle">VideoCore VPU ×2</text>
         <g class="corebox"><rect class="core" data-core="vpu0" x="334" y="192" width="60" height="44" rx="2"><title>VPU core 0</title></rect><text class="ts core-n" x="364" y="211" text-anchor="middle">0</text><text class="m core-s" data-core-state="vpu0" x="364" y="226" text-anchor="middle">off</text></g>

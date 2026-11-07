@@ -164,6 +164,7 @@ function setPhase(next, detail) {
   if (!$("#tab-net").hidden) renderNet();
   if (!on) {
     setCores(null);
+    setWatchdog(null);
     $("#led-act").dataset.on = false;
   }
   renderDrawer();
@@ -517,10 +518,35 @@ function setCores(cores) {
   for (let i = 0; i < 2; i++) set(`vpu${i}`, cores?.vpu[i]);
 }
 
+const WDOG_BAR = 80;
+let watchdogFeeds = 0;
+
+function watchdogWords(w) {
+  if (w?.leftUs == null) return "not armed";
+  const s = (us) => `${(us / 1e6).toFixed(2)} s`;
+  return `${s(w.leftUs)} of ${s(w.windowUs)} left, fed ${w.feeds} time${w.feeds === 1 ? "" : "s"}`;
+}
+
+function setWatchdog(w) {
+  const dog = $("#wdog");
+  const share = w?.leftUs != null && w.windowUs ? Math.min(1, w.leftUs / w.windowUs) : 0;
+  dog.dataset.state = w?.leftUs == null ? "off" : share < 0.25 ? "low" : "on";
+  $("#wdog-left").setAttribute("width", (WDOG_BAR * share).toFixed(1));
+  $("#wdog-title").textContent = `Watchdog: ${watchdogWords(w)}`;
+  const feeds = w?.feeds ?? 0;
+  if (feeds > watchdogFeeds) {
+    dog.dataset.beat = false;
+    dog.getBoundingClientRect();
+    dog.dataset.beat = true;
+  }
+  watchdogFeeds = feeds;
+}
+
 function showState() {
   const st = lastState;
   if (!st) return;
   setCores(st.cores);
+  setWatchdog(st.watchdog);
   $("#led-act").dataset.on = st.armReleased;
   if (st.ended) stopwatch.run(false);
   showClock();
@@ -953,6 +979,7 @@ function renderInspect(info) {
           h("tr", {}, h("th", {}, "Model time"), h("td", {}, `${(st.modelUs / 1e6).toFixed(3)} s`)),
           h("tr", {}, h("th", {}, "ARM started by the firmware"), h("td", {}, st.armReleased ? "yes" : "not yet")),
           h("tr", {}, h("th", {}, "Resets so far"), h("td", {}, String(st.reboots))),
+          h("tr", {}, h("th", {}, "Watchdog"), h("td", {}, watchdogWords(st.watchdog))),
           h("tr", {}, h("th", {}, "Outcome"), h("td", {}, st.ended ? `${st.ok ? "ok" : "failed"} – ${st.why}` : "still running")),
           st.logDropped ? h("tr", {}, h("th", {}, "Log lines dropped"), h("td", {}, String(st.logDropped))) : null)),
       h("section", {}, h("h3", {}, "Cores"),

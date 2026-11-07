@@ -52,6 +52,9 @@ at the bottom of the screen, and the board stood upright, its parts in two
 columns under the SoC.
 
 The six cores in the SoC are tiles of one size that light up as they start, sleep and run, and the top bar counts the VPU and ARM instructions retired. The
+**WDOG** bar beside the LEDs is what is left of the watchdog's countdown once
+the firmware arms it, in model time, and flashes on each heartbeat – a `WDOG`
+write that reloads it ([`pm.rs`](../src/periph/pm.rs)). The
 serial console sits under the board, and beside it four tabs:
 
 - **I/O** reads the `io` channel as what the board read: the files on each disk
