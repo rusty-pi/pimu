@@ -154,6 +154,19 @@ pub struct BootArgs {
     #[arg(long, value_name = "ROW=VALUE", value_parser = parse_otp_row, help_heading = "Machine")]
     pub otp_row: Vec<(u32, u32)>,
 
+    /// Program the fuses of a board with signed boot for this RSA-2048 public
+    /// key (`pubkey.bin`, 264 bytes): the boot mode bits that make the EEPROM
+    /// stages take only signed files, and the key's SHA-256 and its count of 0
+    /// bits. The EEPROM then needs a `bootconf.sig` that key signed. An
+    /// `--otp-row` over them wins.
+    #[arg(long, value_name = "pubkey.bin", help_heading = "Machine")]
+    pub otp_signed_boot: Option<PathBuf>,
+
+    /// Make the fuses of this row refuse to blow, so the firmware's attempt to
+    /// program it leaves it as it was. Repeatable.
+    #[arg(long, value_name = "ROW", value_parser = parse_u32, help_heading = "Machine")]
+    pub otp_stuck_row: Vec<u32>,
+
     /// Execute a real VPU maskROM dump from its reset vector, 0x60000000, instead
     /// of the modelled boot ROM stage. Experimental. The dump stays a local file:
     /// never commit it.

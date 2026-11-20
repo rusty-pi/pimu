@@ -74,6 +74,15 @@ pub struct BootSpec {
     /// needs a row an owner would have fused says so here.
     #[serde(default)]
     pub otp_row: Vec<String>,
+    /// The RSA-2048 public key (`pubkey.bin`) of a board with signed boot: its
+    /// fuses get the boot mode bits, the key's SHA-256 and its count of 0 bits,
+    /// and the EEPROM has to carry a `bootconf.sig` that key signed.
+    #[serde(default)]
+    pub otp_signed_boot: Option<String>,
+    /// Rows whose fuses do not blow: the firmware's attempt to program one
+    /// leaves it as it was.
+    #[serde(default)]
+    pub otp_stuck_row: Vec<u32>,
     /// RSA public key to put in the EEPROM, for a signed `boot.img`.
     #[serde(default)]
     pub eeprom_pubkey: Option<String>,
@@ -651,6 +660,14 @@ impl BootScenario {
         for kv in &b.otp_row {
             args.push("--otp-row".into());
             args.push(kv.clone());
+        }
+        if let Some(key) = &b.otp_signed_boot {
+            args.push("--otp-signed-boot".into());
+            args.push(self.resolve(key).display().to_string());
+        }
+        for row in &b.otp_stuck_row {
+            args.push("--otp-stuck-row".into());
+            args.push(row.to_string());
         }
         if let Some(k) = &b.eeprom_pubkey {
             args.push("--eeprom-pubkey".into());

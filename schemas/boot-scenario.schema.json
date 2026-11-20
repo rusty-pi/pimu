@@ -105,6 +105,24 @@
           },
           "type": "array"
         },
+        "otp_signed_boot": {
+          "default": null,
+          "description": "The RSA-2048 public key (`pubkey.bin`) of a board with signed boot: its\nfuses get the boot mode bits, the key's SHA-256 and its count of 0 bits,\nand the EEPROM has to carry a `bootconf.sig` that key signed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "otp_stuck_row": {
+          "default": [],
+          "description": "Rows whose fuses do not blow: the firmware's attempt to program one\nleaves it as it was.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "sd": {
           "anyOf": [
             {

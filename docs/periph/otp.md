@@ -12,6 +12,7 @@ Sources:
 
 - decompile (high): EEPROM bootloader `getconfig(key)`: key -> `+0x1C`, 0 -> `+0x0C` / `+0x08`, `+0x08 |= 1`, poll `+0x10`, value <- `+0x18`
 - decompile (high): start4's OTP driver (table `0x3EDFB5F8`): command `0x3ED3F24C`, read `0x3ED3FAA2`, enable programming `0x3ED3F9BE`, program `0x3ED3FC52`
+- decompile (high): start4 `0x3ED3FC52` on VPU version `0x0400_0161` and `0x0400_0162` (`0x3EC63640`: `gp+0x1564` set): the open at `0x3ED3F986` runs the idle sequence `0x3ED620EC` (`CLKMUX` 3, `PARAM_B` / `PARAM_A` / `KEY` / `DATA` 0, `CLKMUX` 2); then per row `KEY` and `DATA = old | new` go in 2 us apart, command 10 runs with a 32000-poll, 2 us budget, and command 3 and the idle sequence end it; the close at `0x3ED3F1F0` zeroes the parameters and `CLKMUX`. The other chips' variant, with `DATA` at `+0x14`, command 1 and a bit-12 enable flag, is not modelled
 
 ## Register map
 
