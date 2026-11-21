@@ -410,6 +410,22 @@ also the way to get the array out, edit it, and boot a board fused differently.
 A file made from a real board's fuses holds that board's secrets: keep it out of
 the repository, and see the OTP rule in [`../CLAUDE.md`](../CLAUDE.md) for why.
 
+Fuses only go from 0 to 1: a program command ORs its bits into the row, once
+the four enable words went in, and a read gives the row back. `--otp-row`
+(`otp_row:` in a scenario) fuses a row before the boot, over the model's own, and
+again at every boot after a reset. A run with `--verbose` ends its report with
+`otp        N rows programmed: ROW...`, or `otp        no row programmed`: the
+rows that differ at the end of the run from the start of the first boot.
+
+`--otp-signed-boot pubkey.bin` (`otp_signed_boot:`) fuses a board with signed
+boot for that RSA-2048 key: the boot mode bits that make the bootloader take
+only signed files (bits 14 and 15 of row 17), the key's SHA-256 in rows 47 to 54
+and its count of 0 bits in row 55. The EEPROM must then carry a `bootconf.sig`
+that key signed, or the bootloader stops at `Failed to validate bootconf.txt`.
+`--otp-stuck-row ROW` (`otp_stuck_row:`) makes a row's fuses refuse to blow: the
+firmware's program command on it completes and leaves it as it was, which is
+what a failed programming looks like to the firmware.
+
 ## Asking the firmware questions
 
 `--mbox-property` and `--mbox-raw` post property requests to the firmware after

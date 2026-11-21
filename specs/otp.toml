@@ -36,6 +36,11 @@ kind       = "decompile"
 ref        = "pinned bootcode `0x80009010` and bootmain `0xA92A8` build the same flags of rows 17, 47-54 and 55; the key check is bootcode `0x800081AA` / bootmain `0xA7E84`"
 confidence = "high"
 
+[[block.source]]
+kind       = "decompile"
+ref        = "start4 `0x3ED3FC52` on VPU version `0x0400_0161` and `0x0400_0162` (`0x3EC63640`: `gp+0x1564` set): the open at `0x3ED3F986` runs the idle sequence `0x3ED620EC` (`CLKMUX` 3, `PARAM_B` / `PARAM_A` / `KEY` / `DATA` 0, `CLKMUX` 2); then per row `KEY` and `DATA = old | new` go in 2 us apart, command 10 runs with a 32000-poll, 2 us budget, and command 3 and the idle sequence end it; the close at `0x3ED3F1F0` zeroes the parameters and `CLKMUX`. The other chips' variant, with `DATA` at `+0x14`, command 1 and a bit-12 enable flag, is not modelled"
+confidence = "high"
+
 [[register]]
 name   = "CLKMUX"
 offset = 0x04

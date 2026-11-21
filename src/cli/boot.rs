@@ -106,6 +106,8 @@ struct BootOpts {
     otp: Option<OtpFile>,
     /// `--otp-row`: rows to fuse before the boot, over the model's own.
     otp_rows: Vec<(u32, u32)>,
+    /// `--otp-stuck-row`: rows whose fuses do not blow.
+    otp_stuck_rows: Vec<u32>,
 }
 
 /// What a medium option names: a disk image, or a directory of a boot
@@ -594,6 +596,20 @@ impl BootOpts {
         for spec in &a.log {
             log.add(*spec).map_err(anyhow::Error::msg)?;
         }
+        let mut otp_rows = Vec::new();
+        if let Some(key) = &a.otp_signed_boot {
+            let pubkey = std::fs::read(key)
+                .with_context(|| format!("--otp-signed-boot {}", key.display()))?;
+            if pubkey.len() != 264 {
+                bail!(
+                    "--otp-signed-boot {}: the public key is {} bytes, want 264 (RSA-2048 n + e)",
+                    key.display(),
+                    pubkey.len()
+                );
+            }
+            otp_rows.extend(pimu::periph::configotp::signed_boot_rows(&pubkey));
+        }
+        otp_rows.extend(a.otp_row);
         Ok(Self {
             path,
             snapshot_save: a.snapshot_save,
@@ -671,7 +687,8 @@ impl BootOpts {
             log,
             log_file: a.log_file,
             otp,
-            otp_rows: a.otp_row,
+            otp_rows,
+            otp_stuck_rows: a.otp_stuck_row,
         })
     }
 }
@@ -730,6 +747,9 @@ fn run_boot(opts: &BootOpts) -> Result<Booted> {
         let mut machine = rig.machine(&carry.flash)?;
         // After the file, so `--otp-row` fuses a row whatever the run started from.
         carry.restore(&mut machine, &opts.otp_rows);
+        for &row in &opts.otp_stuck_rows {
+            machine.config_otp.stick(row);
+        }
         // One-shot: the bootcode clears it as it reads it.
         if reboots == 0 && opts.tryboot {
             machine.pm.request_tryboot();
@@ -1430,6 +1450,7 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     let fdt_blob = locate_fdt(&mut emu.machine, handoff, &report.console);
     if verbose {
         print_summary(&report, &emu, start);
+        print_programmed_rows(&fuses_at_start, emu.machine.config_otp.fuses());
         print_arm_cores(&emu, opts.eeprom);
         print_property_replies(&emu.machine);
         print_device_state(&emu.machine, fdt_blob.as_ref().map(|(_, b)| b.as_slice()));
@@ -1487,6 +1508,24 @@ fn print_report(opts: &BootOpts, booted: Booted) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// The rows the firmware programmed over the run, resets included.
+fn print_programmed_rows(before: &BTreeMap<u32, u32>, now: &BTreeMap<u32, u32>) {
+    let programmed: Vec<String> = now
+        .iter()
+        .filter(|(row, word)| before.get(row).copied().unwrap_or(0) != **word)
+        .map(|(row, _)| row.to_string())
+        .collect();
+    if programmed.is_empty() {
+        println!("otp        no row programmed");
+    } else {
+        println!(
+            "otp        {} rows programmed: {}",
+            programmed.len(),
+            programmed.join(" ")
+        );
+    }
 }
 
 fn print_summary(report: &RunReport, emu: &Emulator, start: u32) {
